@@ -1,0 +1,22 @@
+[Unit]
+Description=Napar Minecraft companion brain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=napar
+Group=napar
+WorkingDirectory=/opt/napar
+EnvironmentFile=/opt/napar/.env
+ExecStart=/opt/napar/.venv/bin/napar
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/napar/data
+
+[Install]
+WantedBy=multi-user.target
