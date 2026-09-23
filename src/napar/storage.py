@@ -53,7 +53,7 @@ class Store:
 
     def create_goal(self, world, description, success_condition):
         goal_id = str(uuid4())
-        self.db.execute('INSERT INTO goals VALUES(?,?,?,?,?,?,?,?)',
+        self.db.execute('INSERT INTO goals VALUES(?,?,?,?,?,?,?)',
                         (goal_id, world, description, success_condition, 'active', '', self.now()))
         self.db.commit()
         return {'goal_id': goal_id, 'status': 'active'}

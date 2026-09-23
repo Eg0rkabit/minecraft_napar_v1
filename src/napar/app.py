@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from collections import OrderedDict
 from secrets import compare_digest
 
 from fastapi import Depends, FastAPI, HTTPException, Security, status
@@ -20,15 +21,19 @@ def create_app(settings: Settings | None = None):
     toolbox = Toolbox(bridge, store)
     engine = Engine(settings, store, bridge, toolbox, make_backend(settings))
     bearer = HTTPBearer(auto_error=False)
+    seen_events = OrderedDict()
 
     def auth(credentials: HTTPAuthorizationCredentials | None = Security(bearer)):
         token = credentials.credentials if credentials else ''
-        if not compare_digest(token, settings.bridge_token.get_secret_value()):
+        if not compare_digest(token.encode(), settings.bridge_token.get_secret_value().encode()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Unauthorized')
 
     @asynccontextmanager
     async def lifespan(_app):
         yield
+        engine.stop()
+        if hasattr(engine.backend, 'close'):
+            await engine.backend.close()
         store.close()
 
     app = FastAPI(title='Napar brain', version='0.1.0', lifespan=lifespan)
@@ -47,6 +52,8 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/v1/bridge/connect', dependencies=[Depends(auth)])
     async def connect(request: Connect):
+        engine.stop()
+        seen_events.clear()
         return bridge.connect(request)
 
     @app.post('/v1/bridge/state', dependencies=[Depends(auth)])
@@ -75,8 +82,15 @@ def create_app(settings: Settings | None = None):
     async def event(event: GameEvent):
         if event.session_id != bridge.session_id:
             raise HTTPException(409, 'Unknown session')
+        if event.event_id in seen_events:
+            return {'status': 'duplicate'}
+        seen_events[event.event_id] = True
+        if len(seen_events) > 1000:
+            seen_events.popitem(last=False)
         store.audit(bridge.world_id or 'unknown', 'event', event.model_dump())
-        if event.kind == 'chat' and (not settings.owner_name or event.sender == settings.owner_name):
+        if event.kind in ('death', 'disconnected', 'danger'):
+            engine.stop()
+        if event.kind == 'chat' and settings.owner_name and event.sender == settings.owner_name:
             return await engine.handle(event.text, trigger='chat')
         return {'status': 'accepted'}
 
