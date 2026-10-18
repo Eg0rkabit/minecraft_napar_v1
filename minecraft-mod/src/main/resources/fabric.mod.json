@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "napar",
+  "version": "${version}",
+  "name": "Napar server body",
+  "description": "Server runtime for the NAPAR companion",
+  "environment": "server",
+  "entrypoints": {"main": ["dev.napar.NaparMod"]},
+  "depends": {
+    "fabricloader": ">=0.19.5", "minecraft": "~26.2",
+    "java": ">=25", "fabric-api": "*", "carpet": ">=26.2 <26.3"
+  }
+}

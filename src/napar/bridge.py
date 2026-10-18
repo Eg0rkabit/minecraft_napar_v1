@@ -33,6 +33,17 @@ class Bridge:
         if not self.session_id or session_id != self.session_id:
             raise ValueError('Unknown or replaced session; reconnect')
 
+    @property
+    def connected(self):
+        return bool(self.session_id and self.snapshot and
+                    time.monotonic() - self.received_at <= self.settings.state_max_age)
+
+    def disconnect(self):
+        self.halt('Adapter disconnected')
+        self.session_id = None
+        self.snapshot = None
+        self.capabilities.clear()
+
     def update(self, snapshot: Snapshot):
         self.check_session(snapshot.session_id)
         if self.snapshot and snapshot.sequence <= self.snapshot.sequence:
@@ -53,6 +64,16 @@ class Bridge:
         self.pending.clear()
 
     async def execute(self, name, arguments):
+        if name == 'stop':
+            self.halt('Model requested stop')
+            generation = self.halt_generation
+            if self.connected:
+                until = time.monotonic() + 3
+                while time.monotonic() < until:
+                    if self.snapshot and self.snapshot.halt_generation >= generation:
+                        return {'status': 'confirmed', 'detail': 'Adapter applied stop generation'}
+                    await asyncio.sleep(.05)
+            return {'status': 'requested', 'detail': 'Stop generation changed; awaiting adapter polling'}
         state = self.observe()
         if name not in self.capabilities:
             raise ValueError(f'Adapter does not support {name}')
@@ -61,9 +82,6 @@ class Bridge:
             distance = sum((arguments[k] - origin[k]) ** 2 for k in ('x', 'y', 'z')) ** 0.5
             if distance > 64:
                 raise ValueError('Move target exceeds 64 blocks; inspect and use shorter waypoints')
-        if name == 'stop':
-            self.halt('Model requested stop')
-            return {'status': 'requested', 'detail': 'Stop generation changed; awaiting adapter polling'}
         action_id = str(uuid4())
         future = asyncio.get_running_loop().create_future()
         action = {'action_id': action_id, 'session_id': self.session_id, 'tool': name,
@@ -105,9 +123,11 @@ class Bridge:
         entry = self.pending.get(result.action_id)
         if not entry or not entry['delivered'] or entry['expires'] <= time.monotonic():
             raise ValueError('Action was not delivered, has expired or was cancelled')
+        if result.snapshot_sequence and (not self.snapshot or self.snapshot.source_sequence<result.snapshot_sequence):
+            raise ValueError('Completion snapshot has not been received yet')
         self.results[result.action_id] = result.model_dump()
         while len(self.results) > 100:
             self.results.popitem(last=False)
         if not entry['future'].done():
-            entry['future'].set_result({'status': result.status, 'detail': result.detail})
+            entry['future'].set_result({'status': result.status, 'detail': result.detail, 'data': result.data})
         return {'accepted': True, 'duplicate': False}

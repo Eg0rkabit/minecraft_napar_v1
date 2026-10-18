@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
 from collections import OrderedDict
 from secrets import compare_digest
+import asyncio
+import time
+from contextlib import suppress
 
 from fastapi import Depends, FastAPI, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -22,6 +25,45 @@ def create_app(settings: Settings | None = None):
     engine = Engine(settings, store, bridge, toolbox, make_backend(settings))
     bearer = HTTPBearer(auto_error=False)
     seen_events = OrderedDict()
+    inbox = asyncio.Queue(maxsize=32)
+    last_background = 0.0
+
+    async def process_events():
+        while True:
+            event = await inbox.get()
+            try:
+                while engine.busy:
+                    await asyncio.sleep(.05)
+                if event.session_id != bridge.session_id:
+                    continue
+                result = await engine.handle(event.text, trigger='chat' if event.kind=='chat' else event.kind)
+                if result['status'] in ('failed', 'step_limit') and 'say' in bridge.capabilities:
+                    await bridge.execute('say', {'message': result['message'][:240]})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                store.audit(bridge.world_id or 'unknown', 'worker_error', {'type': type(exc).__name__})
+            finally:
+                inbox.task_done()
+
+    async def continue_goals():
+        nonlocal last_background
+        # Idle polling is local and free. Paid reasoning requires a real goal/event.
+        while True:
+            await asyncio.sleep(5)
+            if not settings.initiative_seconds or engine.busy or not inbox.empty() or not bridge.connected:
+                continue
+            world=bridge.world_id
+            mode=store.autonomy(world)
+            if mode=='wait' or time.monotonic()-last_background<settings.initiative_seconds:
+                continue
+            active=[goal for goal in store.goals(world) if goal['status']=='active' or goal['summary'].startswith('[revalidate]')]
+            if not active and mode!='expanded':
+                continue
+            if store.usage()['calls']>=settings.max_calls_per_day//2 or bridge.observe().get('activity','idle')!='idle':
+                continue
+            last_background=time.monotonic()
+            await engine.handle('Продолжи активную цель по свежему состоянию. Если цели нет, выбери безопасное исследование рядом; не повторяй предложения в чат.',trigger='initiative')
 
     def auth(credentials: HTTPAuthorizationCredentials | None = Security(bearer)):
         token = credentials.credentials if credentials else ''
@@ -30,29 +72,39 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(_app):
+        worker = asyncio.create_task(process_events())
+        background = asyncio.create_task(continue_goals())
         yield
-        engine.stop()
+        engine.stop('shutdown')
+        worker.cancel()
+        background.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+        with suppress(asyncio.CancelledError):
+            await background
         if hasattr(engine.backend, 'close'):
             await engine.backend.close()
         store.close()
 
-    app = FastAPI(title='Napar brain', version='0.1.0', lifespan=lifespan)
+    app = FastAPI(title='Napar brain', version='0.2.0', lifespan=lifespan)
     app.state.engine, app.state.bridge, app.state.store = engine, bridge, store
 
     @app.get('/health')
     async def health():
-        return {'ok': True, 'connected': bool(bridge.session_id), 'llm': settings.llm_backend}
+        return {'ok': True, 'version':'0.2.0','connected': bridge.connected, 'llm': settings.llm_backend}
 
     @app.get('/v1/status', dependencies=[Depends(auth)])
     async def status_view():
         return {
-            'connected': bool(bridge.session_id), 'world_id': bridge.world_id,
+            'connected': bridge.connected, 'world_id': bridge.world_id,
             'session_id': bridge.session_id, 'usage': store.usage(), 'busy': engine.busy,
+            'capabilities':sorted(bridge.capabilities), 'autonomy':store.autonomy(bridge.world_id) if bridge.world_id else 'wait',
+            'limits':{'daily_calls':settings.max_calls_per_day,'steps':settings.max_steps,'initiative_seconds':settings.initiative_seconds},
         }
 
     @app.post('/v1/bridge/connect', dependencies=[Depends(auth)])
     async def connect(request: Connect):
-        engine.stop()
+        engine.stop('connection')
         seen_events.clear()
         return bridge.connect(request)
 
@@ -80,18 +132,41 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/v1/bridge/events', dependencies=[Depends(auth)])
     async def event(event: GameEvent):
+        nonlocal last_background
         if event.session_id != bridge.session_id:
             raise HTTPException(409, 'Unknown session')
         if event.event_id in seen_events:
             return {'status': 'duplicate'}
+        owner_chat = event.kind == 'chat' and settings.owner_name and event.sender == settings.owner_name
+        if owner_chat and event.text.strip().casefold() in ('стоп', 'stop'):
+            engine.stop()
+            while not inbox.empty():
+                inbox.get_nowait()
+                inbox.task_done()
+            return {'status': 'stopped'}
+        if owner_chat:
+            if inbox.full():
+                raise HTTPException(429, 'Event queue full; retry', headers={'Retry-After': '1'})
+            inbox.put_nowait(event)
+            last_background=time.monotonic()
         seen_events[event.event_id] = True
         if len(seen_events) > 1000:
             seen_events.popitem(last=False)
         store.audit(bridge.world_id or 'unknown', 'event', event.model_dump())
         if event.kind in ('death', 'disconnected', 'danger'):
-            engine.stop()
-        if event.kind == 'chat' and settings.owner_name and event.sender == settings.owner_name:
-            return await engine.handle(event.text, trigger='chat')
+            engine.stop(event.kind)
+        if event.kind in ('danger','death','stuck'):
+            store.remember(bridge.world_id or 'unknown',key='last_incident',content=event.text or event.kind,
+                           kind='experience',evidence=event.event_id,truth='observation',confidence=.9,source='game_event')
+            # At most one background incident per minute; half of the daily cap stays for owner chat.
+            if (bridge.connected and not inbox.full() and time.monotonic()-last_background>=60
+                    and store.usage()['calls']<settings.max_calls_per_day//2):
+                inbox.put_nowait(event)
+                last_background=time.monotonic()
+        if event.kind == 'disconnected':
+            bridge.disconnect()
+        if owner_chat:
+            return {'status': 'queued'}
         return {'status': 'accepted'}
 
     @app.post('/v1/chat', dependencies=[Depends(auth)])

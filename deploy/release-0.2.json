@@ -1,0 +1,10 @@
+{
+  "version": "0.2.0",
+  "body_sha256": "87be2ea041e8d966c3e9874438eb0e804544bf74ed5953c28f02855ea4863e76",
+  "parts": [
+    "deploy/napar-body-0.2.0.part0.b64",
+    "deploy/napar-body-0.2.0.part1.b64",
+    "deploy/napar-body-0.2.0.part2.b64",
+    "deploy/napar-body-0.2.0.part3.b64"
+  ]
+}

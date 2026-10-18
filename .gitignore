@@ -15,4 +15,5 @@ data/
 logs/
 build/
 .gradle/
+minecraft-mod/libs/*.jar
 run/
