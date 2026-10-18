@@ -126,7 +126,7 @@ def main():
     mod=mods[0]
     test_env=os.environ.copy();test_env['PYTHONPATH']=str(stage/'src')
     print('Checking staged brain with no paid API requests...',flush=True)
-    run(str(PYTHON),'-m','pytest',str(stage/'tests'),'-q','-p','no:cacheprovider','--basetemp',str(stage/'test-'+str(time.time_ns())),cwd=stage,env=test_env)
+    run(str(PYTHON),'-m','pytest',str(stage/'tests'),'-q','-p','no:cacheprovider','--basetemp',str(stage/('test-'+str(time.time_ns()))),cwd=stage,env=test_env)
     print('Staged tests passed. Saving Minecraft and stopping services for the update.',flush=True)
     guard={'required':True}
     def ensure_running():
