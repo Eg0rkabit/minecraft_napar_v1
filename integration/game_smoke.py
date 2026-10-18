@@ -15,7 +15,7 @@ MOD=ROOT/'minecraft-mod'
 ARTIFACTS=Path(os.environ.get('NAPAR_SMOKE_OUTPUT',str(ROOT/'test-artifacts')))
 ARTIFACTS.mkdir(parents=True,exist_ok=True)
 LOG=ARTIFACTS/'expanded-game-smoke.log'
-REPORT=ARTIFACTS/('extra-game-smoke.json' if os.getenv('NAPAR_SMOKE_EXTRA') else 'expanded-game-smoke.json')
+REPORT=ARTIFACTS/('craft-allocation-smoke.json' if os.getenv('NAPAR_SMOKE_CRAFT') else 'extra-game-smoke.json' if os.getenv('NAPAR_SMOKE_EXTRA') else 'expanded-game-smoke.json')
 TOKEN='local-acceptance-test-token-'*2
 app=create_app(Settings(_env_file=None,bridge_token=TOKEN,owner_name='Napar',database=ARTIFACTS/'smoke.db',action_timeout=35,llm_backend='disabled',initiative_seconds=0))
 
@@ -27,6 +27,15 @@ async def main():
     values=dict(line.split('=',1) for line in original.splitlines() if '=' in line and not line.startswith('#'))
     values.update({'server-ip':'127.0.0.1','server-port':'25575','online-mode':'false','pause-when-empty-seconds':'0','level-name':'world-acceptance'})
     properties.write_text('\n'.join(f'{k}={v}' for k,v in values.items())+'\n')
+    if os.getenv('NAPAR_SMOKE_CRAFT'):
+        fixture=MOD/'run/world-acceptance/datapacks/napar_acceptance'
+        fixture.mkdir(parents=True,exist_ok=True)
+        (fixture/'pack.mcmeta').write_text(json.dumps({'pack':{'description':'NAPAR disposable crafting regression fixture','min_format':[107,1],'max_format':[107,1]}}))
+        recipes=fixture/'data/napar_acceptance/recipe'
+        recipes.mkdir(parents=True,exist_ok=True)
+        (recipes/'mixed_planks.json').write_text(json.dumps({'type':'minecraft:crafting_shapeless','category':'misc',
+            'ingredients':[['minecraft:oak_planks','minecraft:birch_planks'],['minecraft:oak_planks','minecraft:birch_planks'],'minecraft:oak_planks','minecraft:oak_planks'],
+            'result':{'id':'minecraft:stick','count':1}}))
     env=os.environ.copy()
     if not env.get('JAVA_HOME'):
         raise RuntimeError('JAVA_HOME must point to JDK 25')
@@ -62,6 +71,41 @@ async def main():
             for text in ['clear Napar','give Napar oak_log 2','give Napar cobblestone 8','give Napar coal 2','give Napar raw_iron 1','give Napar apple 3','give Napar iron_pickaxe 1','effect give Napar hunger 5 255 true']:
                 cmd(text)
             await asyncio.sleep(2)
+            if os.getenv('NAPAR_SMOKE_CRAFT'):
+                for text in ['clear Napar','give Napar oak_planks 2','give Napar birch_planks 2']:cmd(text)
+                await asyncio.sleep(1)
+                await action('inspect',dict(sensor='recipes',target='napar_acceptance:mixed_planks',radius=1))
+                await action('craft',dict(recipe='napar_acceptance:mixed_planks',times=1))
+                assert inventory('minecraft:stick')==1
+                assert inventory('minecraft:oak_planks')==inventory('minecraft:birch_planks')==0
+                for text in ['clear Napar','give Napar oak_planks 2','give Napar birch_planks 2']:cmd(text)
+                await asyncio.sleep(1)
+                await action('craft',dict(recipe='napar_acceptance:mixed_planks',times=2),'failed')
+                assert inventory('minecraft:oak_planks')==inventory('minecraft:birch_planks')==2 and inventory('minecraft:stick')==0
+                cmd('setblock 2 199 2 water')
+                await asyncio.sleep(.7)
+                water=await action('inspect',dict(sensor='area',target='water',radius=6))
+                assert any(block['block']=='minecraft:water' for block in water['data']['blocks'])
+                # The danger HTTP event must not cancel the body's emergency retreat.
+                before=app.state.bridge.observe()['position']
+                cmd('difficulty normal')
+                cmd('summon zombie 4.5 200 0.5 {NoAI:1b,Invulnerable:1b}')
+                await asyncio.sleep(.5)
+                cmd('damage Napar 15 minecraft:mob_attack by @e[type=minecraft:zombie,limit=1,sort=nearest]')
+                await wait(lambda:app.state.bridge.observe()['health']<=6,5)
+                await asyncio.sleep(2)
+                after=app.state.bridge.observe()
+                assert sum((after['position'][axis]-before[axis])**2 for axis in ('x','z'))>1,after
+                assert app.state.store.recall('expanded-acceptance','last_incident')
+                results.append(dict(scenario='emergency_retreat_survives_danger_event',health=after['health'],before=before,after=after['position']))
+                await action('stop',{},'confirmed')
+                stopped=app.state.bridge.observe()['position']
+                await asyncio.sleep(.8)
+                assert sum((app.state.bridge.observe()['position'][axis]-stopped[axis])**2 for axis in ('x','z'))<.1
+                passed=True
+                REPORT.write_text(json.dumps(dict(passed=True,results=results,state=app.state.bridge.observe()),ensure_ascii=False,indent=2),encoding='utf-8')
+                print('CRAFT_ALLOCATION_SMOKE_PASSED',flush=True)
+                return
             if os.getenv('NAPAR_SMOKE_EXTRA'):
                 for text in ['give Napar shield 1','give Napar iron_sword 1','give Napar iron_helmet 1','setblock 2 200 1 stone_slab[type=bottom]','setblock 4 200 1 stone_brick_stairs[facing=east]','fill 6 197 0 9 197 3 stone','fill 6 198 0 9 199 3 water','setblock 1 200 3 red_bed[facing=south,part=foot]','setblock 1 200 4 red_bed[facing=south,part=head]']:
                     cmd(text)
@@ -177,3 +221,4 @@ async def main():
             await web
 
 if __name__=='__main__':asyncio.run(main())
+

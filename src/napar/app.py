@@ -27,6 +27,7 @@ def create_app(settings: Settings | None = None):
     seen_events = OrderedDict()
     inbox = asyncio.Queue(maxsize=32)
     last_background = 0.0
+    last_incident = 0.0
 
     async def process_events():
         while True:
@@ -60,7 +61,7 @@ def create_app(settings: Settings | None = None):
             active=[goal for goal in store.goals(world) if goal['status']=='active' or goal['summary'].startswith('[revalidate]')]
             if not active and mode!='expanded':
                 continue
-            if store.usage()['calls']>=settings.max_calls_per_day//2 or bridge.observe().get('activity','idle')!='idle':
+            if (settings.max_calls_per_day and store.usage()['calls']>=settings.max_calls_per_day//2) or bridge.observe().get('activity','idle')!='idle':
                 continue
             last_background=time.monotonic()
             await engine.handle('Продолжи активную цель по свежему состоянию. Если цели нет, выбери безопасное исследование рядом; не повторяй предложения в чат.',trigger='initiative')
@@ -132,7 +133,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/v1/bridge/events', dependencies=[Depends(auth)])
     async def event(event: GameEvent):
-        nonlocal last_background
+        nonlocal last_background, last_incident
         if event.session_id != bridge.session_id:
             raise HTTPException(409, 'Unknown session')
         if event.event_id in seen_events:
@@ -159,9 +160,10 @@ def create_app(settings: Settings | None = None):
             store.remember(bridge.world_id or 'unknown',key='last_incident',content=event.text or event.kind,
                            kind='experience',evidence=event.event_id,truth='observation',confidence=.9,source='game_event')
             # At most one background incident per minute; half of the daily cap stays for owner chat.
-            if (bridge.connected and not inbox.full() and time.monotonic()-last_background>=60
-                    and store.usage()['calls']<settings.max_calls_per_day//2):
+            if (bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60
+                    and (not settings.max_calls_per_day or store.usage()['calls']<settings.max_calls_per_day//2)):
                 inbox.put_nowait(event)
+                last_incident=time.monotonic()
                 last_background=time.monotonic()
         if event.kind == 'disconnected':
             bridge.disconnect()
@@ -179,3 +181,4 @@ def create_app(settings: Settings | None = None):
         return {'stopped': True}
 
     return app
+

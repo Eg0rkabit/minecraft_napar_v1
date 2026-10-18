@@ -1,5 +1,6 @@
 """Bounded event loop around the optional model and validated tools."""
 import json
+from itertools import count
 from openai import APIError
 
 
@@ -56,7 +57,10 @@ class Engine:
 
     def stop(self, reason='owner'):
         self.cancelled = True
-        self.bridge.halt('Stopped by owner')
+        if reason=='danger':
+            self.bridge.cancel_pending('Interrupted by local survival reflex')
+        else:
+            self.bridge.halt('Stopped: '+reason)
         if self.bridge.world_id:
             self.store.pause_goals(self.bridge.world_id,('[revalidate] ' if reason!='owner' else '')+f'Прервано: {reason}; нужна повторная оценка перед продолжением')
 
@@ -102,11 +106,11 @@ class Engine:
         try:
             if trigger in ('chat','owner'):
                 self.store.conversation(world_id,'user',user_text)
-            for _ in range(self.settings.max_steps):
+            for _ in (range(self.settings.max_steps) if self.settings.max_steps else count()):
                 if interrupted():
                     return {'status': 'cancelled', 'message': 'Остановлено владельцем.'}
                 if self.settings.llm_backend != 'disabled':
-                    if trigger not in ('chat','owner') and self.store.usage()['calls']>=self.settings.max_calls_per_day//2:
+                    if self.settings.max_calls_per_day and trigger not in ('chat','owner') and self.store.usage()['calls']>=self.settings.max_calls_per_day//2:
                         return {'status':'budget_reserve','message':'Фоновая работа приостановлена: оставляю бюджет для сообщений хозяина.'}
                     self.store.reserve_call(self.settings.max_calls_per_day)
                 decision = await self.backend.decide(
@@ -158,3 +162,4 @@ class Engine:
             return {'status': 'failed', 'message': text[:1000]}
         finally:
             self.busy = False
+

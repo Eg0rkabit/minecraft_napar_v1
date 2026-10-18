@@ -148,6 +148,7 @@ def main():
     if database.exists():
         with sqlite3.connect(database) as source, sqlite3.connect(backup/'brain.db') as destination:source.backup(destination)
     shutil.copy2(mod,backup/'body.jar')
+    shutil.copy2(GAME/'server.properties',backup/'server.properties')
     runtime=GAME/'napar-runtime.json'
     if runtime.exists():shutil.copy2(runtime,backup/'presence.json')
     plan={'files':mapping,'new_files':[str(BRAIN/file.relative_to(stage)) for file in files if str(BRAIN/file.relative_to(stage)) not in mapping],
@@ -170,6 +171,7 @@ for suffix in ('','-wal','-shm'):
  if t.exists():shutil.move(t,failed/t.name)
 if (b/'brain.db').exists():shutil.copy2(b/'brain.db',database)
 shutil.copy2(b/'body.jar',p['mod'])
+if (b/'server.properties').exists():shutil.copy2(b/'server.properties','/opt/napar-next/server/server.properties')
 presence=Path('/opt/napar-next/server/napar-runtime.json')
 if p['had_presence']:shutil.copy2(b/'presence.json',presence)
 elif presence.exists():shutil.move(presence,failed/'presence.json')
@@ -188,8 +190,14 @@ print('Previous working build, settings and memory restored. Failed-version data
             temporary=destination.with_suffix('.upgrade');temporary.write_bytes(source.read_bytes());os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o640);os.replace(temporary,destination)
         temporary=mod.with_suffix('.upgrade');temporary.write_bytes(body);os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o644);os.replace(temporary,mod)
         temporary=BRAIN/'.env.upgrade';shutil.copy2(BRAIN/'.env',temporary)
-        for key,value in {'NAPAR_INITIATIVE_SECONDS':'60','NAPAR_MAX_STEPS':'8','NAPAR_ACTION_TIMEOUT':'35'}.items():set_key(temporary,key,value)
+        for key,value in {'NAPAR_INITIATIVE_SECONDS':'60','NAPAR_MAX_STEPS':'0','NAPAR_MAX_CALLS_PER_DAY':'0','NAPAR_ACTION_TIMEOUT':'35'}.items():set_key(temporary,key,value)
         os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o600);os.replace(temporary,BRAIN/'.env')
+        properties=GAME/'server.properties'
+        lines=properties.read_text().splitlines()
+        overrides={'difficulty':'normal','view-distance':'16'}
+        lines=[line for line in lines if line.split('=',1)[0] not in overrides]
+        lines.extend(f'{key}={value}' for key,value in overrides.items())
+        properties.write_text('\n'.join(lines)+'\n');os.chown(properties,account.pw_uid,account.pw_gid)
         started=time.time();run('systemctl','start','napar-next-brain','napar-next-game')
         headers={'Authorization':'Bearer '+values['NAPAR_BRIDGE_TOKEN']}
         until=time.monotonic()+110
@@ -207,9 +215,9 @@ print('Previous working build, settings and memory restored. Failed-version data
             time.sleep(1)
         else:raise TimeoutError('Updated services did not become ready')
         run('systemctl','is-active','napar-next-brain','napar-next-game')
-        result={'version':'0.2.0','body_sha256':manifest['body_sha256'],'commit':args.ref,'health':health,'status':status,'backup':str(backup),'rollback':str(backup/'rollback.py')}
+        result={'version':'0.2.0','body_sha256':manifest['body_sha256'],'commit':args.ref,'health':health,'status':status,'backup':str(backup),'rollback':str(backup/'rollback.py'),'server_settings':overrides}
         (BASE/'upgrade-0.2-result.json').write_text(json.dumps(result,indent=2))
-        print('READY: NAPAR 0.2, separate player restored, '+str(len(status['capabilities']))+' game tools. Daily budget unchanged.',flush=True)
+        print('READY: NAPAR 0.2, separate player restored, '+str(len(status['capabilities']))+' game tools. Daily/step limits disabled; difficulty normal; view distance 16.',flush=True)
         print('Rollback: '+str(PYTHON)+' '+str(backup/'rollback.py'),flush=True)
         guard['required']=False
     except BaseException:
@@ -220,3 +228,4 @@ print('Previous working build, settings and memory restored. Failed-version data
 
 
 if __name__=='__main__':main()
+

@@ -68,7 +68,7 @@ public final class SurvivalActions {
             switch(tool){
                 case "mine" -> {
                     block=pos(args);GameSensors.reachable(p,block);var state=p.level().getBlockState(block);originalBlock=state.getBlock();
-                    if(state.isAir()||state.getDestroySpeed(p.level(),block)<0||state.hasBlockEntity())throw new IllegalArgumentException("Block is unbreakable, absent or a protected block entity");
+                    if(state.isAir()||!state.getFluidState().isEmpty()||state.getDestroySpeed(p.level(),block)<0||state.hasBlockEntity())throw new IllegalArgumentException("Block is absent, fluid, unbreakable or a protected block entity");
                     if(block.equals(p.blockPosition().below()))throw new IllegalArgumentException("Refusing to mine the block supporting my feet");
                     for(Direction face:Direction.values())if(!p.level().getFluidState(block.relative(face)).isEmpty())throw new IllegalArgumentException("Adjacent fluid could flood the mining position");
                     if(p.level().getBlockState(block.above()).getBlock() instanceof net.minecraft.world.level.block.FallingBlock)throw new IllegalArgumentException("Falling block above target");
@@ -214,3 +214,4 @@ public final class SurvivalActions {
         if(completion==null)return;var callback=completion;String previous=job;completion=null;job="idle";navigator.cancel();if(!previous.equals("sneak"))pack(player).stopAll();player.releaseUsingItem();callback.accept(result(status,detail,data));
     }
 }
+

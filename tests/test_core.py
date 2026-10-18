@@ -55,3 +55,26 @@ def test_replaced_session_cannot_poll(tmp_path):
     bridge.connect(Connect(world_id='two', agent_name='Napar', capabilities=[]))
     with pytest.raises(ValueError, match='reconnect'):
         bridge.poll(old)
+
+
+@pytest.mark.asyncio
+async def test_danger_cancels_pending_plan_without_stopping_reflex(tmp_path):
+    bridge=Bridge(settings(tmp_path))
+    sid=bridge.connect(Connect(world_id='w',agent_name='Napar',capabilities=['move_to']))['session_id']
+    bridge.update(snapshot(sid))
+    task=asyncio.create_task(bridge.execute('move_to',dict(x=1,y=64,z=1)))
+    await asyncio.sleep(0)
+    generation=bridge.halt_generation
+    bridge.cancel_pending('danger')
+    assert (await task)['status']=='cancelled'
+    assert not bridge.poll(sid)['actions']
+    assert bridge.halt_generation==generation
+
+
+def test_unlimited_calls_still_record_usage(tmp_path):
+    store=Store(tmp_path/'unlimited.db')
+    for _ in range(5):store.reserve_call(0)
+    assert store.usage()['calls']==5
+    with pytest.raises(ValueError,match='limit'):store.reserve_call(5)
+    store.close()
+

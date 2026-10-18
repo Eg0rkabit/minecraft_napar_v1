@@ -58,6 +58,10 @@ class Bridge:
 
     def halt(self, reason='Stopped by owner'):
         self.halt_generation += 1
+        self.cancel_pending(reason)
+
+    def cancel_pending(self,reason):
+        """Cancel a plan without cancelling an already-running local survival reflex."""
         for action in list(self.pending.values()):
             if not action['future'].done():
                 action['future'].set_result({'status': 'cancelled', 'detail': reason})
@@ -131,3 +135,4 @@ class Bridge:
         if not entry['future'].done():
             entry['future'].set_result({'status': result.status, 'detail': result.detail, 'data': result.data})
         return {'accepted': True, 'duplicate': False}
+

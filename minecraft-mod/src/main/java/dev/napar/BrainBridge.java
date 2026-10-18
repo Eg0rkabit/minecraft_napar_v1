@@ -34,7 +34,7 @@ public final class BrainBridge {
     private final GroundNavigator navigator;
     private final SurvivalActions actions;
     private final SurvivalReflexes reflexes;
-    public BrainBridge(GroundNavigator navigator) { this.navigator = navigator; this.actions = new SurvivalActions(navigator); this.reflexes=new SurvivalReflexes(navigator,actions,this); }
+    public BrainBridge(GroundNavigator navigator) { this.navigator = navigator; this.actions = new SurvivalActions(navigator); this.reflexes=new SurvivalReflexes(actions,this); }
 
     public void event(String kind,String text) {
         if(session==null||events.size()>=32)return;
@@ -69,7 +69,7 @@ public final class BrainBridge {
         });
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             var player = server.getPlayerList().getPlayerByName("Napar");
-            if (!(player instanceof EntityPlayerMPFake)) { state = null; actions.cancel(); return; }
+            if (!(player instanceof EntityPlayerMPFake)) { state = null; reflexes.cancel(); actions.cancel(); return; }
             if (System.nanoTime() - lastContact > TimeUnit.SECONDS.toNanos(3)) stop(server);
             else {
                 navigator.tick();
@@ -83,10 +83,11 @@ public final class BrainBridge {
 
     private void publishState(EntityPlayerMPFake player){
         JsonObject next=GameSensors.snapshot(player);next.addProperty("sequence",++sequence);next.addProperty("source_sequence",sequence);
-        next.addProperty("halt_generation",generation);next.addProperty("activity",actions.activity());state=next;observedAt=System.nanoTime();
+        next.addProperty("halt_generation",generation);next.addProperty("activity",reflexes.active()?"emergency":actions.activity());state=next;observedAt=System.nanoTime();
     }
 
     public void stop(MinecraftServer server) {
+        reflexes.cancel();
         actions.cancel();
         var player = server.getPlayerList().getPlayerByName("Napar");
         if (player instanceof EntityPlayerMPFake) ((ServerPlayerInterface) player).getActionPack().stopAll();
@@ -165,7 +166,9 @@ public final class BrainBridge {
             var player = server.getPlayerList().getPlayerByName("Napar");
             if (!(player instanceof EntityPlayerMPFake)) throw new IllegalStateException("Companion absent");
             JsonObject args = action.getAsJsonObject("arguments");
-            switch (action.get("tool").getAsString()) {
+            String tool=action.get("tool").getAsString();
+            if(reflexes.active()&&!tool.equals("inspect")&&!tool.equals("say")&&!tool.equals("look_at"))throw new IllegalStateException("Local emergency controller active; observe and reassess after retreat");
+            switch (tool) {
                 case "look_at" -> {
                     double x = args.get("x").getAsDouble(), y = args.get("y").getAsDouble(), z = args.get("z").getAsDouble();
                     if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) throw new IllegalArgumentException("Invalid position");
@@ -193,3 +196,4 @@ public final class BrainBridge {
         results.add(result);
     }
 }
+

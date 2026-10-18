@@ -150,7 +150,7 @@ class Store:
         day = self.now()[:10]
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO usage VALUES(?,0,0)', (day,))
-            updated = self.db.execute('UPDATE usage SET calls=calls+1 WHERE day=? AND calls<?', (day, maximum))
+            updated = self.db.execute('UPDATE usage SET calls=calls+1 WHERE day=? AND (?=0 OR calls<?)', (day, maximum, maximum))
             if not updated.rowcount:
                 raise ValueError('Daily model call limit reached (UTC); no request sent')
 
@@ -161,3 +161,4 @@ class Store:
     def usage(self):
         row = self.db.execute('SELECT * FROM usage WHERE day=?', (self.now()[:10],)).fetchone()
         return dict(row) if row else {'day': self.now()[:10], 'calls': 0, 'tokens': 0}
+

@@ -34,9 +34,9 @@ public final class SurvivalCrafting {
         if(at==requirements.size())return 1;if(++attempts[0]>10000)return 0;
         for(int slot=0;slot<available.size();slot++){
             ItemStack stack=available.get(slot);if(stack.isEmpty()||!net.minecraft.world.entity.player.Inventory.isUsableForCrafting(stack)||!requirements.get(at).test(stack))continue;
-            ItemStack one=stack.copyWithCount(1);stack.shrink(1);chosen.add(one);
+            ItemStack before=stack.copy();ItemStack one=stack.copyWithCount(1);stack.shrink(1);chosen.add(one);
             if(fill(requirements,at+1,available,chosen,attempts)==1)return 1;
-            chosen.removeLast();available.set(slot,one.copyWithCount(stack.getCount()+1));
+            chosen.removeLast();available.set(slot,before);
         }
         return 0;
     }
@@ -86,3 +86,4 @@ public final class SurvivalCrafting {
         JsonObject result=new JsonObject();result.add("recipes",out);result.addProperty("limit",24);return result;
     }
 }
+

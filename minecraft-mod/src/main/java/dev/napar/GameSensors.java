@@ -35,7 +35,8 @@ public final class GameSensors {
         out.addProperty("targeting_me",e instanceof Mob mob && mob.getTarget()==p); return out;
     }
     public static BlockHitResult ray(EntityPlayerMPFake p,BlockPos at) {
-        return p.level().clip(new ClipContext(p.getEyePosition(),Vec3.atCenterOf(at),ClipContext.Block.OUTLINE,ClipContext.Fluid.NONE,p));
+        var fluids=p.level().getFluidState(at).isEmpty()?ClipContext.Fluid.NONE:ClipContext.Fluid.ANY;
+        return p.level().clip(new ClipContext(p.getEyePosition(),Vec3.atCenterOf(at),ClipContext.Block.OUTLINE,fluids,p));
     }
     public static boolean visible(EntityPlayerMPFake p,BlockPos at,double range) {
         return p.level().hasChunkAt(at) && p.getEyePosition().distanceTo(Vec3.atCenterOf(at))<=range
@@ -52,6 +53,7 @@ public final class GameSensors {
         JsonObject out=new JsonObject(); out.add("position",position(Vec3.atLowerCornerOf(at)));
         var state=p.level().getBlockState(at); out.addProperty("block",BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
         out.addProperty("state",state.toString()); out.addProperty("break_progress_per_tick",state.getDestroyProgress(p,p.level(),at));
+        out.addProperty("fluid",BuiltInRegistries.FLUID.getKey(state.getFluidState().getType()).toString());out.addProperty("replaceable",state.canBeReplaced());
         out.addProperty("correct_tool",p.getMainHandItem().isCorrectToolForDrops(state));
         out.addProperty("has_block_entity",state.hasBlockEntity()); return out;
     }
@@ -105,3 +107,4 @@ public final class GameSensors {
         env.addProperty("border_distance",p.level().getWorldBorder().getDistanceToBorder(p)); out.add("environment",env); return out;
     }
 }
+

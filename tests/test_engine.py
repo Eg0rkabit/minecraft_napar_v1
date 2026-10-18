@@ -66,3 +66,22 @@ def test_budget_persists_and_goals_pause_after_restart(tmp_path):
     with pytest.raises(ValueError, match='Daily'):
         store.reserve_call(1)
     store.close()
+
+
+async def test_unlimited_reasoning_can_finish_beyond_twenty_steps(runtime):
+    runtime.settings.max_steps=0
+    runtime.settings.max_calls_per_day=0
+    runtime.settings.llm_backend='openai'
+    class LongBackend:
+        calls=0
+        async def decide(self,*args,**kwargs):
+            self.calls+=1
+            if self.calls<=25:
+                return Decision(tool_calls=[dict(id=str(self.calls),name='recall',arguments='{"query":"base"}')])
+            return Decision('finished')
+    runtime.backend=LongBackend()
+    result=await runtime.handle('long task',trigger='owner')
+    assert result['status']=='completed'
+    assert runtime.backend.calls==26
+    assert runtime.store.usage()['calls']==26
+
