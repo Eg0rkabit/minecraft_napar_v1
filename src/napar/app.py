@@ -214,7 +214,7 @@ def create_app(settings: Settings | None = None):
             store.remember(bridge.world_id or 'unknown',key='last_incident',content=event.text or event.kind,
                            kind='experience',evidence=event.event_id,truth='observation',confidence=.9,source='game_event')
             # At most one background incident per minute; half of the daily cap stays for owner chat.
-            if (engine.paid_available() and bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60
+            if (settings.initiative_seconds and engine.paid_available() and bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60
                     and (not settings.max_calls_per_day or store.usage()['calls']<settings.max_calls_per_day//2)):
                 inbox.put_nowait(event)
                 last_incident=time.monotonic()

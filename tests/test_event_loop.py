@@ -40,7 +40,7 @@ def test_all_tool_object_properties_are_required(tmp_path):
 
 def test_danger_keeps_local_escape_generation_and_ignores_recent_chat_cooldown(tmp_path):
     from napar.protocol import Snapshot, Position
-    app=create_app(Settings(_env_file=None,bridge_token='x'*40,owner_name='Egor',database=tmp_path/'db',llm_backend='disabled',max_calls_per_day=0))
+    app=create_app(Settings(_env_file=None,bridge_token='x'*40,owner_name='Egor',database=tmp_path/'db',llm_backend='disabled',max_calls_per_day=0,initiative_seconds=60))
     entered=[]
     class Backend:
         async def decide(self,messages,*args,**kwargs):
@@ -62,4 +62,23 @@ def test_danger_keeps_local_escape_generation_and_ignores_recent_chat_cooldown(t
         assert app.state.bridge.halt_generation==generation
         client.post('/v1/stop',headers=headers)
         assert app.state.bridge.halt_generation==generation+1
+
+
+def test_background_off_does_not_call_model_for_danger(tmp_path):
+    from napar.protocol import Snapshot, Position
+    app=create_app(Settings(_env_file=None,bridge_token='x'*40,database=tmp_path/'db',initiative_seconds=0))
+    class Unexpected:
+        async def decide(self,*args,**kwargs):raise AssertionError('Background model call')
+    app.state.engine.backend=Unexpected()
+    headers={'Authorization':'Bearer '+'x'*40}
+    with TestClient(app) as client:
+        sid=client.post('/v1/bridge/connect',headers=headers,json=dict(world_id='w',agent_name='Napar',capabilities=[])).json()['session_id']
+        app.state.bridge.update(Snapshot(session_id=sid,sequence=1,position=Position(x=0,y=64,z=0),health=5,food=20))
+        response=client.post('/v1/bridge/events',headers=headers,json=dict(session_id=sid,event_id='danger',kind='danger',text='retreat'))
+        assert response.status_code==200
+        import time
+        time.sleep(.1)
+        assert app.state.store.usage()['calls']==0
+        assert not app.state.engine.busy
+        assert app.state.store.recall('w','last_incident')
 
