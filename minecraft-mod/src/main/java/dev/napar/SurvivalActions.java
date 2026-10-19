@@ -27,7 +27,9 @@ public final class SurvivalActions {
     private Entity target;
     private Entity followTarget;
     private boolean shieldCombat;
-    private int lostFollowTicks;
+    private int lostFollowTicks,nextFollowRouteTick,lastFollowNotice=-1000;
+    private Vec3 lastFollowSeen,followRouteTarget;
+    private final ArrayDeque<Vec3> followTrail=new ArrayDeque<>();
     private long deadline;
     private int ticks,initialCount,initialFood;
     private Object originalBlock;
@@ -47,7 +49,7 @@ public final class SurvivalActions {
         return p.level().getEntities(p,p.getBoundingBox().inflate(32)).stream().filter(e->(e.getUUID().toString().equals(id)||e.getName().getString().equals(id))&&p.hasLineOfSight(e)).findFirst().orElseThrow(()->new IllegalArgumentException("Target not visible within 32 blocks"));
     }
     public void cancel(){
-        followTarget=null;
+        followTarget=null;followTrail.clear();lastFollowSeen=null;followRouteTarget=null;
         navigator.cancel();
         if(completion!=null)finish("cancelled","Physical action cancelled",new JsonObject());
     }
@@ -80,7 +82,7 @@ public final class SurvivalActions {
                     pack(p).lookAt(GameSensors.ray(p,block).getLocation());pack(p).start(EntityPlayerActionPack.ActionType.ATTACK,EntityPlayerActionPack.Action.continuous());
                 }
                 case "move_to" -> navigator.start(p,new Vec3(args.get("x").getAsDouble(),args.get("y").getAsDouble(),args.get("z").getAsDouble()),seconds,(status,detail)->finish(status,detail,new JsonObject()));
-                case "follow_player" -> {target=entity(p,args.get("player").getAsString());if(!(target instanceof Player))throw new IllegalArgumentException("Target is not a visible player");followTarget=target;lostFollowTicks=0;deadline=Long.MAX_VALUE;finish("succeeded","Following mode established; continues locally until stop, another physical action, target loss or bridge loss",data("following",target.getName().getString()));}
+                case "follow_player" -> {target=entity(p,args.get("player").getAsString());if(!(target instanceof Player))throw new IllegalArgumentException("Target is not a visible player");followTarget=target;lostFollowTicks=0;nextFollowRouteTick=0;lastFollowSeen=target.position();followTrail.add(lastFollowSeen);deadline=Long.MAX_VALUE;finish("succeeded","Following mode established; continues locally until stop, another physical action, logout/dimension change or bridge loss",data("following",target.getName().getString()));}
                 case "pickup" -> {target=entity(p,args.get("target").getAsString());if(!(target instanceof ItemEntity item))throw new IllegalArgumentException("Target is not an item drop");pickupItem=BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).toString();initialCount=count(p,pickupItem);}
                 case "attack" -> {target=entity(p,args.get("target").getAsString());if(target instanceof Player||!(target instanceof LivingEntity))throw new IllegalArgumentException("Combat tool accepts living non-player targets only");
                     shieldCombat=args.has("tactic")&&args.get("tactic").getAsString().equals("shield");
@@ -169,14 +171,7 @@ public final class SurvivalActions {
         p.getInventory().setChanged();p.containerMenu.broadcastChanges();return container(p,at);
     }
     public void tick(){
-        if(followTarget!=null){
-            ticks++;
-            if(!player.isAlive()||followTarget.isRemoved()||!followTarget.isAlive()||player.level()!=followTarget.level()){followTarget=null;navigator.cancel();return;}
-            if(!player.hasLineOfSight(followTarget)){if(++lostFollowTicks>80){followTarget=null;navigator.cancel();}return;}
-            lostFollowTicks=0;
-            if(player.distanceTo(followTarget)>2.5)approach(followTarget);else{navigator.cancel();pack(player).lookAt(followTarget.getEyePosition());}
-            return;
-        }
+        if(followTarget!=null){tickFollow();return;}
         if(completion==null)return;
         try{
             ticks++;
@@ -204,10 +199,56 @@ public final class SurvivalActions {
             }
         }catch(RuntimeException e){finish("failed",e.getMessage(),new JsonObject());}
     }
+    private void tickFollow(){
+        ticks++;
+        if(!player.isAlive()||followTarget.isRemoved()||!followTarget.isAlive()||player.level()!=followTarget.level()){
+            cancel();return;
+        }
+        boolean visible=player.distanceTo(followTarget)<=32&&player.hasLineOfSight(followTarget);
+        if(visible){
+            lostFollowTicks=0;
+            // Ignore the middle of a jump; it is not a walkable destination.
+            if(followTarget.onGround()||followTarget.isInWater()){
+                Vec3 seen=followTarget.position();
+                if(lastFollowSeen==null||seen.distanceToSqr(lastFollowSeen)>1.4*1.4){
+                    lastFollowSeen=seen;followTrail.addLast(seen);
+                    while(followTrail.size()>64)followTrail.removeFirst();
+                }
+            }
+            if(player.distanceTo(followTarget)<2.5){
+                navigator.cancel();followRouteTarget=null;followTrail.clear();
+                if(lastFollowSeen!=null)followTrail.add(lastFollowSeen);
+                pack(player).lookAt(followTarget.getEyePosition());return;
+            }
+        }else lostFollowTicks++;
+        while(followTrail.size()>1&&player.position().distanceTo(followTrail.peekFirst())<1.6)followTrail.removeFirst();
+        if(navigator.active())pack(player).setSprinting(visible&&player.distanceTo(followTarget)>6&&player.getFoodData().getFoodLevel()>6&&player.onGround()&&!player.isInWater());
+        if(ticks<nextFollowRouteTick)return;
+        // Follow a recent visible point. Behind a corner, use the recorded trail instead.
+        Vec3 point=visible?lastFollowSeen:followTrail.peekFirst();
+        if(point==null||player.position().distanceTo(point)<1.2){
+            navigator.cancel();followRouteTarget=null;nextFollowRouteTick=ticks+10;
+            if(lostFollowTicks>200&&ticks-lastFollowNotice>600){
+                lastFollowNotice=ticks;
+                player.level().getServer().getPlayerList().broadcastSystemMessage(net.minecraft.network.chat.Component.literal("<Napar> Потерял тебя из виду. Жду здесь, подойди поближе."),false);
+            }
+            return;
+        }
+        if(navigator.active()&&followRouteTarget!=null&&point.distanceToSqr(followRouteTarget)<4){
+            nextFollowRouteTick=ticks+5;return;
+        }
+        double distance=player.position().distanceTo(point);
+        if(distance>24)point=player.position().add(point.subtract(player.position()).normalize().scale(24));
+        followRouteTarget=point;nextFollowRouteTick=ticks+10;
+        navigator.start(player,point,8,(status,detail)->{
+            if(!status.equals("cancelled"))followRouteTarget=null;
+            if(status.equals("failed"))nextFollowRouteTick=ticks+20;
+        });
+    }
     private void approach(Entity entity){
         if(ticks%20!=1&&navigator.active())return;
         var at=entity.blockPosition();Vec3 next=new Vec3(at.getX()+.5,at.getY(),at.getZ()+.5);
-        navigator.start(player,next,followTarget!=null?8:Math.min(8,(deadline-System.nanoTime())/1e9),(status,detail)->{if(status.equals("failed")){if(followTarget!=null){followTarget=null;pack(player).stopAll();}else finish("failed","Approach failed: "+detail,new JsonObject());}});
+        navigator.start(player,next,followTarget!=null?8:Math.min(8,(deadline-System.nanoTime())/1e9),(status,detail)->{if(status.equals("failed")){if(followTarget!=null){nextFollowRouteTick=ticks+20;}else finish("failed","Approach failed: "+detail,new JsonObject());}});
     }
     private static JsonObject result(String status,String detail,JsonObject data){JsonObject out=new JsonObject();out.addProperty("status",status);out.addProperty("detail",detail==null?"Action rejected":detail.substring(0,Math.min(1000,detail.length())));out.add("data",data);return out;}
     private void finish(String status,String detail,JsonObject data){

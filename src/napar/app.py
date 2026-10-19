@@ -15,6 +15,7 @@ from .llm import make_backend
 from .protocol import ActionResult, ChatMessage, Connect, GameEvent, Snapshot
 from .storage import Store
 from .toolbox import Toolbox
+from .quick_commands import parse_control
 
 
 def create_app(settings: Settings | None = None):
@@ -26,6 +27,7 @@ def create_app(settings: Settings | None = None):
     bearer = HTTPBearer(auto_error=False)
     seen_events = OrderedDict()
     inbox = asyncio.Queue(maxsize=32)
+    controls = asyncio.Queue(maxsize=8)
     last_background = 0.0
     last_incident = 0.0
 
@@ -38,7 +40,7 @@ def create_app(settings: Settings | None = None):
                 if event.session_id != bridge.session_id:
                     continue
                 result = await engine.handle(event.text, trigger='chat' if event.kind=='chat' else event.kind)
-                if result['status'] in ('failed', 'step_limit') and 'say' in bridge.capabilities:
+                if result['status'] in ('failed', 'step_limit', 'billing_paused') and 'say' in bridge.capabilities:
                     await bridge.execute('say', {'message': result['message'][:240]})
             except asyncio.CancelledError:
                 raise
@@ -47,12 +49,42 @@ def create_app(settings: Settings | None = None):
             finally:
                 inbox.task_done()
 
+    async def process_controls():
+        while True:
+            event=await controls.get()
+            try:
+                if event.session_id!=bridge.session_id:
+                    continue
+                world=bridge.world_id
+                store.conversation(world,'user',event.text)
+                control=parse_control(event.text)
+                if control in ('stay','auto_leave'):
+                    store.presence(world,'stay' if control=='stay' else 'auto')
+                    reply='Хорошо, останусь на сервере.' if control=='stay' else 'Ладно, если дел нет — выйду через пару минут после тебя.'
+                    store.conversation(world,'assistant',reply)
+                    if 'say' in bridge.capabilities:await bridge.execute('say',{'message':reply})
+                    continue
+                result=await bridge.execute('follow_player',{'player':settings.owner_name})
+                reply='Ага, иду за тобой.' if result.get('status')=='succeeded' else 'Не вижу тебя или не могу начать идти. Подойди поближе.'
+                if result.get('status')=='cancelled':
+                    continue
+                store.audit(world,'local_control',{'control':'follow','status':result.get('status')})
+                store.conversation(world,'assistant',reply)
+                if 'say' in bridge.capabilities:
+                    await bridge.execute('say',{'message':reply})
+            except asyncio.CancelledError:
+                raise
+            except ValueError:
+                pass
+            finally:
+                controls.task_done()
+
     async def continue_goals():
         nonlocal last_background
         # Idle polling is local and free. Paid reasoning requires a real goal/event.
         while True:
             await asyncio.sleep(5)
-            if not settings.initiative_seconds or engine.busy or not inbox.empty() or not bridge.connected:
+            if not engine.paid_available() or not settings.initiative_seconds or engine.busy or not inbox.empty() or not bridge.connected:
                 continue
             world=bridge.world_id
             mode=store.autonomy(world)
@@ -74,13 +106,17 @@ def create_app(settings: Settings | None = None):
     @asynccontextmanager
     async def lifespan(_app):
         worker = asyncio.create_task(process_events())
+        controller = asyncio.create_task(process_controls())
         background = asyncio.create_task(continue_goals())
         yield
         engine.stop('shutdown')
         worker.cancel()
+        controller.cancel()
         background.cancel()
         with suppress(asyncio.CancelledError):
             await worker
+        with suppress(asyncio.CancelledError):
+            await controller
         with suppress(asyncio.CancelledError):
             await background
         if hasattr(engine.backend, 'close'):
@@ -99,6 +135,8 @@ def create_app(settings: Settings | None = None):
         return {
             'connected': bridge.connected, 'world_id': bridge.world_id,
             'session_id': bridge.session_id, 'usage': store.usage(), 'busy': engine.busy,
+            'presence_mode':store.presence(bridge.world_id),
+            'paid_enabled':settings.paid_enabled, 'provider_pause':store.provider_pause(),
             'capabilities':sorted(bridge.capabilities), 'autonomy':store.autonomy(bridge.world_id) if bridge.world_id else 'wait',
             'limits':{'daily_calls':settings.max_calls_per_day,'steps':settings.max_steps,'initiative_seconds':settings.initiative_seconds},
         }
@@ -120,7 +158,10 @@ def create_app(settings: Settings | None = None):
     @app.get('/v1/bridge/actions', dependencies=[Depends(auth)])
     async def actions(session_id: str):
         try:
-            return bridge.poll(session_id)
+            result=bridge.poll(session_id)
+            result['presence']={'stay':store.presence(bridge.world_id)=='stay',
+                'work_pending':engine.busy or any(g['status']=='active' for g in store.goals(bridge.world_id))}
+            return result
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -139,12 +180,25 @@ def create_app(settings: Settings | None = None):
         if event.event_id in seen_events:
             return {'status': 'duplicate'}
         owner_chat = event.kind == 'chat' and settings.owner_name and event.sender == settings.owner_name
-        if owner_chat and event.text.strip().casefold() in ('стоп', 'stop'):
+        control=parse_control(event.text) if owner_chat else None
+        if control in ('stop','follow'):
             engine.stop()
             while not inbox.empty():
                 inbox.get_nowait()
                 inbox.task_done()
-            return {'status': 'stopped'}
+            while not controls.empty():
+                controls.get_nowait()
+                controls.task_done()
+            seen_events[event.event_id]=True
+            if control=='stop':
+                return {'status': 'stopped'}
+            controls.put_nowait(event)
+            return {'status':'local_queued'}
+        if control in ('stay','auto_leave'):
+            if controls.full():raise HTTPException(429,'Control queue full')
+            seen_events[event.event_id]=True
+            controls.put_nowait(event)
+            return {'status':'local_queued'}
         if owner_chat:
             if inbox.full():
                 raise HTTPException(429, 'Event queue full; retry', headers={'Retry-After': '1'})
@@ -160,7 +214,7 @@ def create_app(settings: Settings | None = None):
             store.remember(bridge.world_id or 'unknown',key='last_incident',content=event.text or event.kind,
                            kind='experience',evidence=event.event_id,truth='observation',confidence=.9,source='game_event')
             # At most one background incident per minute; half of the daily cap stays for owner chat.
-            if (bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60
+            if (engine.paid_available() and bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60
                     and (not settings.max_calls_per_day or store.usage()['calls']<settings.max_calls_per_day//2)):
                 inbox.put_nowait(event)
                 last_incident=time.monotonic()

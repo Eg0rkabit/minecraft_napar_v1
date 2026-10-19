@@ -12,8 +12,12 @@ values=dotenv_values(base/'brain/.env')
 request=urllib.request.Request('http://127.0.0.1:8000/v1/status',headers={
     'Authorization':'Bearer '+values['NAPAR_BRIDGE_TOKEN']})
 with urllib.request.urlopen(request,timeout=5) as response:status=json.load(response)
-assert status['connected'] and len(status['capabilities'])==21,status
-assert status['limits']['daily_calls']==status['limits']['steps']==0,status['limits']
+parked=json.loads((base/'server/napar-runtime.json').read_text()).get('parked',False)
+assert len(status['capabilities'])==21 or (parked and not status['capabilities']),status
+if not status['connected']:
+    assert json.loads((base/'server/napar-runtime.json').read_text()).get('parked') is True,status
+assert status['paid_enabled'] is False
+assert status['limits']['initiative_seconds']==0
 properties=dict(line.split('=',1) for line in (base/'server/server.properties').read_text().splitlines()
                 if '=' in line and not line.startswith('#'))
 assert properties['difficulty']=='normal' and properties['view-distance']=='16'
@@ -29,7 +33,7 @@ for name in ('napar-next-brain','napar-next-game'):
     memory=int(systemctl('show','-p','MemoryCurrent','--value'))
     services[name]={'active':True,'enabled':True,'memory_mib':round(memory/1048576)}
 result={'passed':True,'commit':installed['commit'],'body_sha256':installed['body_sha256'],
-        'connected':True,'game_tools':len(status['capabilities']),'limits':status['limits'],
+        'paid_enabled':status['paid_enabled'],'connected':status['connected'],'presence_mode':status['presence_mode'],'game_tools':len(status['capabilities']),'limits':status['limits'],
         'difficulty':properties['difficulty'],'view_distance':int(properties['view-distance']),
         'services':services,'backup':installed['backup']}
 (base/'runtime-0.2-result.json').write_text(json.dumps(result,indent=2))

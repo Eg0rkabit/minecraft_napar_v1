@@ -110,7 +110,7 @@ public final class GroundNavigator {
         }
         if(player.position().distanceTo(lastProgress)>.12){lastProgress=player.position();stalled=0;}else if(++stalled>50){finish("failed","Movement stalled; inspect obstacle before retrying");return;}
         var actions=((ServerPlayerInterface)player).getActionPack();
-        actions.lookAt(new Vec3(target.x,player.getEyeY(),target.z));actions.setForward(horizontal<.5?.4f:.7f);
+        actions.lookAt(new Vec3(target.x,player.getEyeY(),target.z));actions.setForward(horizontal<.5?.4f:1.0f);
         if(player.isInWater())actions.start(EntityPlayerActionPack.ActionType.JUMP,EntityPlayerActionPack.Action.continuous());
         else if(next.y>player.getY()+.3&&player.onGround())actions.start(EntityPlayerActionPack.ActionType.JUMP,EntityPlayerActionPack.Action.once());
         else actions.start(EntityPlayerActionPack.ActionType.JUMP,null);
@@ -120,3 +120,4 @@ public final class GroundNavigator {
         ((ServerPlayerInterface)player).getActionPack().stopAll();var callback=completion;completion=null;route=null;callback.accept(status,detail);
     }
 }
+

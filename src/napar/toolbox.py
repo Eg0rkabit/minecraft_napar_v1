@@ -26,7 +26,7 @@ LOCAL = {
 REMOTE = {
     'inspect': (InspectArgs, 'Inspect inventory, visible area (target optional block-id filter; radius capped at 12), entity (UUID/name), block/container (target x,y,z), recipes (target recipe ID substring), navigation. Containers must be opened first. No hidden blocks.'),
     'move_to': (MoveArgs, 'Walk within 32 blocks over loaded collision surfaces (including slabs/stairs), one-block jumps, drops up to two blocks and surface water. Use x/z block centres. Destination y adjusts by at most 0.7 to the safe surface. Wait for arrival; blocked or unsupported routes fail.'),
-    'follow_player': (FollowArgs, 'Start following a visible player using local navigation, without repeated model calls. Acknowledges mode establishment, not arrival. Continues until stop, another physical action, bridge loss or losing the target for four seconds.'),
+    'follow_player': (FollowArgs, 'Start following a visible player using local navigation, without repeated model calls. Acknowledges mode establishment, not arrival. Persists through temporary line-of-sight loss or route failure, retrying visible/last-seen waypoints. Ends on stop, another physical action, bridge loss, logout or dimension change.'),
     'look_at': (MoveArgs, 'Turn towards a position.'),
     'stop': (EmptyArgs, 'Request immediate cancellation of movement.'),
     'say': (SayArgs, 'Say a short Russian message in Minecraft chat.'),
@@ -156,3 +156,4 @@ def strict_schema(schema):
         for value in schema:
             strict_schema(value)
     return schema
+

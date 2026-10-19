@@ -77,11 +77,66 @@ async def test_unlimited_reasoning_can_finish_beyond_twenty_steps(runtime):
         async def decide(self,*args,**kwargs):
             self.calls+=1
             if self.calls<=25:
-                return Decision(tool_calls=[dict(id=str(self.calls),name='recall',arguments='{"query":"base"}')])
+                return Decision(tool_calls=[dict(id=str(self.calls),name='recall',arguments='{"query":"base'+str(self.calls)+'"}')])
             return Decision('finished')
     runtime.backend=LongBackend()
     result=await runtime.handle('long task',trigger='owner')
     assert result['status']=='completed'
     assert runtime.backend.calls==26
     assert runtime.store.usage()['calls']==26
+
+
+async def test_payment_error_is_latched_and_survives_restart(runtime):
+    import httpx
+    from openai import APIStatusError
+    runtime.settings.llm_backend='openai'
+    class Rejected:
+        calls=0
+        async def decide(self,*args,**kwargs):
+            self.calls+=1
+            response=httpx.Response(402,request=httpx.Request('POST','https://example.test'))
+            raise APIStatusError('payment required',response=response,body=None)
+    runtime.backend=Rejected()
+    assert (await runtime.handle('hello'))['status']=='billing_paused'
+    assert (await runtime.handle('retry'))['status']=='billing_paused'
+    assert runtime.backend.calls==1
+    other=Store(runtime.settings.database)
+    assert other.provider_pause()=='HTTP 402'
+    other.close()
+
+
+async def test_paid_disabled_never_calls_backend(runtime):
+    runtime.settings.paid_enabled=False
+    class Unexpected:
+        async def decide(self,*args,**kwargs):raise AssertionError('Paid request attempted')
+    runtime.backend=Unexpected()
+    assert (await runtime.handle('hello'))['status']=='billing_paused'
+    assert runtime.store.usage()['calls']==0
+
+
+async def test_no_progress_loop_stops_after_three_identical_steps(runtime):
+    runtime.settings.max_steps=0
+    class Repeating:
+        calls=0
+        async def decide(self,*args,**kwargs):
+            self.calls+=1
+            return Decision(tool_calls=[dict(id=str(self.calls),name='recall',arguments='{"query":"same"}')])
+    runtime.backend=Repeating()
+    assert (await runtime.handle('go'))['status']=='failed'
+    assert runtime.backend.calls==3
+
+
+async def test_observe_loop_does_not_evade_guard_with_new_snapshot_sequence(runtime):
+    from napar.protocol import Snapshot,Position
+    runtime.settings.max_steps=0
+    class Observing:
+        calls=0
+        async def decide(self,*args,**kwargs):
+            self.calls+=1
+            runtime.bridge.update(Snapshot(session_id=runtime.bridge.session_id,sequence=self.calls,
+                position=Position(x=0,y=64,z=0),health=20,food=20,environment={'day_time':self.calls}))
+            return Decision(tool_calls=[dict(id=str(self.calls),name='observe',arguments='{}')])
+    runtime.backend=Observing()
+    assert (await runtime.handle('look'))['status']=='failed'
+    assert runtime.backend.calls==3
 

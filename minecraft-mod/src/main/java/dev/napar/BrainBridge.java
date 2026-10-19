@@ -28,6 +28,9 @@ public final class BrainBridge {
     private volatile long lastContact;
     private volatile long observedAt;
     private volatile boolean closed;
+    private volatile boolean keepPresent,workPending;
+    public boolean keepPresent(){return keepPresent;}
+    public boolean workPending(){return (workPending&&System.nanoTime()-lastContact<TimeUnit.SECONDS.toNanos(3))||reflexes.active()||!actions.activity().equals("idle");}
     private long sequence;
     private int ticks;
     private long generation = -1;
@@ -146,6 +149,10 @@ public final class BrainBridge {
                 long nextGeneration = response.get("halt_generation").getAsLong();
                 if (nextGeneration != generation || response.get("stop").getAsBoolean()) stop(server);
                 generation = nextGeneration;
+                if(response.has("presence")){
+                    var policy=response.getAsJsonObject("presence");
+                    keepPresent=policy.get("stay").getAsBoolean();workPending=policy.get("work_pending").getAsBoolean();
+                }
                 if (response.get("stop").getAsBoolean()) return;
                 for (JsonElement entry : response.getAsJsonArray("actions")) execute(server, sid, entry.getAsJsonObject(), received);
             });

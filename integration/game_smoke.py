@@ -15,9 +15,9 @@ MOD=ROOT/'minecraft-mod'
 ARTIFACTS=Path(os.environ.get('NAPAR_SMOKE_OUTPUT',str(ROOT/'test-artifacts')))
 ARTIFACTS.mkdir(parents=True,exist_ok=True)
 LOG=ARTIFACTS/'expanded-game-smoke.log'
-REPORT=ARTIFACTS/('craft-allocation-smoke.json' if os.getenv('NAPAR_SMOKE_CRAFT') else 'extra-game-smoke.json' if os.getenv('NAPAR_SMOKE_EXTRA') else 'expanded-game-smoke.json')
+REPORT=ARTIFACTS/('presence-game-smoke.json' if os.getenv('NAPAR_SMOKE_PRESENCE') else 'follow-game-smoke.json' if os.getenv('NAPAR_SMOKE_FOLLOW') else 'craft-allocation-smoke.json' if os.getenv('NAPAR_SMOKE_CRAFT') else 'extra-game-smoke.json' if os.getenv('NAPAR_SMOKE_EXTRA') else 'expanded-game-smoke.json')
 TOKEN='local-acceptance-test-token-'*2
-app=create_app(Settings(_env_file=None,bridge_token=TOKEN,owner_name='Napar',database=ARTIFACTS/'smoke.db',action_timeout=35,llm_backend='disabled',initiative_seconds=0))
+app=create_app(Settings(_env_file=None,bridge_token=TOKEN,owner_name='Alex' if os.getenv('NAPAR_SMOKE_FOLLOW') or os.getenv('NAPAR_SMOKE_PRESENCE') else 'Napar',paid_enabled=not bool(os.getenv('NAPAR_SMOKE_FOLLOW') or os.getenv('NAPAR_SMOKE_PRESENCE')),database=ARTIFACTS/'smoke.db',action_timeout=35,llm_backend='disabled',initiative_seconds=0))
 
 async def main():
     properties=MOD/'run/server.properties'
@@ -39,7 +39,8 @@ async def main():
     env=os.environ.copy()
     if not env.get('JAVA_HOME'):
         raise RuntimeError('JAVA_HOME must point to JDK 25')
-    env.update(NAPAR_BRIDGE_TOKEN=TOKEN,NAPAR_WORLD_ID='expanded-acceptance',NAPAR_OWNER_NAME='Napar',NAPAR_BRIDGE_URL='http://127.0.0.1:8001',NAPAR_RESTORE_PLAYER='false')
+    env.update(NAPAR_BRIDGE_TOKEN=TOKEN,NAPAR_WORLD_ID='expanded-acceptance',NAPAR_OWNER_NAME='Alex' if os.getenv('NAPAR_SMOKE_FOLLOW') or os.getenv('NAPAR_SMOKE_PRESENCE') else 'Napar',NAPAR_BRIDGE_URL='http://127.0.0.1:8001',NAPAR_RESTORE_PLAYER='false')
+    if os.getenv('NAPAR_SMOKE_PRESENCE'):env['NAPAR_IDLE_LOGOUT_SECONDS']='5'
     gradle_command=(['cmd.exe','/c',str(MOD/'gradlew.bat')] if os.name=='nt' else [str(MOD/'gradlew')])+['runServer','--no-daemon','--console=plain']
     server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=8001,log_level='warning'))
     web=asyncio.create_task(server.serve())
@@ -67,10 +68,102 @@ async def main():
             await wait(lambda:'Napar runtime loaded.' in LOG.read_text(errors='replace'))
             for text in ['gamerule doDaylightCycle false','time set day','difficulty peaceful','forceload add -16 -16 32 32','fill -12 199 -12 20 199 20 stone','fill -12 200 -12 20 207 20 air','setblock 3 200 0 oak_log','setblock 0 200 3 crafting_table','setblock -2 200 2 chest','setblock -3 200 2 furnace','execute positioned 0.5 200 0.5 run napar spawn']:
                 cmd(text)
+            if os.getenv('NAPAR_SMOKE_PRESENCE'):cmd('player Alex spawn at 6.5 200 0.5 facing 0 0 in minecraft:overworld')
             await wait(lambda:app.state.bridge.connected,45)
             for text in ['clear Napar','give Napar oak_log 2','give Napar cobblestone 8','give Napar coal 2','give Napar raw_iron 1','give Napar apple 3','give Napar iron_pickaxe 1','effect give Napar hunger 5 255 true']:
                 cmd(text)
             await asyncio.sleep(2)
+            if os.getenv('NAPAR_SMOKE_PRESENCE'):
+                import httpx
+                async def control(text):
+                    async with httpx.AsyncClient(trust_env=False) as client:
+                        response=await client.post('http://127.0.0.1:8001/v1/bridge/events',headers={'Authorization':'Bearer '+TOKEN},json=dict(session_id=app.state.bridge.session_id,event_id=str(time.time_ns()),kind='chat',sender='Alex',text=text))
+                        assert response.status_code==200,response.text
+                for text in ['effect clear Napar','clear Napar']:cmd(text)
+                app.state.store.presence('expanded-acceptance','auto')
+                cmd('player Alex kill')
+                await wait(lambda:not app.state.bridge.connected,15)
+                saved=json.loads((MOD/'run/napar-runtime.json').read_text())
+                assert saved['parked'] is True
+                results.append(dict(scenario='idle_logout_after_owner'))
+                cmd('player Alex spawn at 6.5 200 0.5 facing 0 0 in minecraft:overworld')
+                await wait(lambda:app.state.bridge.connected,20)
+                await control('останься на сервере')
+                await wait(lambda:app.state.store.presence('expanded-acceptance')=='stay',3)
+                await asyncio.sleep(1)
+                cmd('player Alex kill')
+                await asyncio.sleep(7)
+                assert app.state.bridge.connected
+                results.append(dict(scenario='explicit_stay_survives_owner_logout'))
+                cmd('player Alex spawn at 6.5 200 0.5 facing 0 0 in minecraft:overworld')
+                await asyncio.sleep(1)
+                await control('выходи после меня')
+                await wait(lambda:app.state.store.presence('expanded-acceptance')=='auto',3)
+                goal=app.state.store.create_goal('expanded-acceptance','temporary fixture task','fixture complete')
+                await asyncio.sleep(1)
+                cmd('player Alex kill')
+                await asyncio.sleep(7)
+                assert app.state.bridge.connected
+                results.append(dict(scenario='unfinished_task_keeps_player_online'))
+                app.state.store.pause_goals('expanded-acceptance','fixture complete')
+                await wait(lambda:not app.state.bridge.connected,15)
+                # A parked player must remain offline across a Minecraft restart.
+                cmd('stop')
+                await asyncio.to_thread(process.wait,60)
+                app.state.bridge.disconnect()
+                env['NAPAR_RESTORE_PLAYER']='true'
+                loaded=LOG.read_text(errors='replace').count('Napar runtime loaded.')
+                process=subprocess.Popen(gradle_command,cwd=MOD,env=env,stdin=subprocess.PIPE,stdout=output,stderr=subprocess.STDOUT,text=True)
+                await wait(lambda:LOG.read_text(errors='replace').count('Napar runtime loaded.')>loaded,90)
+                await asyncio.sleep(3)
+                assert not app.state.bridge.connected
+                cmd('player Alex spawn at 6.5 200 0.5 facing 0 0 in minecraft:overworld')
+                await wait(lambda:app.state.bridge.connected,20)
+                assert app.state.store.usage()['calls']==0
+                results.append(dict(scenario='parked_restart_and_owner_return'))
+                passed=True
+                REPORT.write_text(json.dumps(dict(passed=True,results=results,usage=app.state.store.usage()),ensure_ascii=False,indent=2),encoding='utf-8')
+                print('PRESENCE_GAME_SMOKE_PASSED',flush=True)
+                return
+            if os.getenv('NAPAR_SMOKE_FOLLOW'):
+                import httpx
+                for text in ['effect clear Napar','clear Napar','effect give Napar saturation 2 10 true','fill -12 199 -12 70 199 20 stone','fill -12 200 -12 70 207 20 air','forceload add -16 -16 80 32','player Alex spawn at 6.5 200 0.5 facing -90 0 in minecraft:overworld']:
+                    cmd(text)
+                await wait(lambda:any(e['name']=='Alex' for e in app.state.bridge.observe()['entities']),20)
+                async with httpx.AsyncClient(trust_env=False) as client:
+                    before=time.monotonic()
+                    response=await client.post('http://127.0.0.1:8001/v1/bridge/events',headers={'Authorization':'Bearer '+TOKEN},json=dict(session_id=app.state.bridge.session_id,event_id='fast-follow',kind='chat',sender='Alex',text='иди за мной'))
+                    assert response.status_code==200,(response.status_code,response.text[:240])
+                    assert response.json()['status']=='local_queued'
+                await wait(lambda:app.state.bridge.observe()['activity']=='following:Alex',5)
+                results.append(dict(scenario='free_local_follow',seconds=round(time.monotonic()-before,3)))
+                cmd('player Alex move forward')
+                await asyncio.sleep(7)
+                cmd('player Alex stop')
+                await asyncio.sleep(3)
+                state=app.state.bridge.observe()
+                alex=next(e for e in state['entities'] if e['name']=='Alex')
+                assert state['activity']=='following:Alex' and state['position']['x']>18,state
+                assert alex['distance']<7,alex
+                results.append(dict(scenario='moving_owner_30_blocks',position=state['position'],distance=alex['distance']))
+                # Owner disappears behind a wall for longer than the old four-second cutoff.
+                for text in ['fill -12 200 4 70 204 4 stone','tp Alex 38.5 200 8.5']:cmd(text)
+                await asyncio.sleep(6)
+                assert app.state.bridge.observe()['activity']=='following:Alex'
+                cmd('fill -12 200 4 70 204 4 air')
+                await wait(lambda:app.state.bridge.observe()['position']['z']>5,12)
+                assert app.state.bridge.observe()['activity']=='following:Alex'
+                results.append(dict(scenario='resume_after_occlusion',position=app.state.bridge.observe()['position']))
+                await action('stop',{},'confirmed')
+                stopped=app.state.bridge.observe()['position']
+                await asyncio.sleep(1)
+                assert sum((app.state.bridge.observe()['position'][axis]-stopped[axis])**2 for axis in ('x','z'))<.1
+                assert app.state.store.usage()['calls']==0
+                cmd('player Alex kill')
+                passed=True
+                REPORT.write_text(json.dumps(dict(passed=True,results=results,usage=app.state.store.usage()),ensure_ascii=False,indent=2),encoding='utf-8')
+                print('FOLLOW_GAME_SMOKE_PASSED',flush=True)
+                return
             if os.getenv('NAPAR_SMOKE_CRAFT'):
                 for text in ['clear Napar','give Napar oak_planks 2','give Napar birch_planks 2']:cmd(text)
                 await asyncio.sleep(1)

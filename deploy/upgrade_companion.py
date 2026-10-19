@@ -190,7 +190,7 @@ print('Previous working build, settings and memory restored. Failed-version data
             temporary=destination.with_suffix('.upgrade');temporary.write_bytes(source.read_bytes());os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o640);os.replace(temporary,destination)
         temporary=mod.with_suffix('.upgrade');temporary.write_bytes(body);os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o644);os.replace(temporary,mod)
         temporary=BRAIN/'.env.upgrade';shutil.copy2(BRAIN/'.env',temporary)
-        for key,value in {'NAPAR_INITIATIVE_SECONDS':'60','NAPAR_MAX_STEPS':'0','NAPAR_MAX_CALLS_PER_DAY':'0','NAPAR_ACTION_TIMEOUT':'35'}.items():set_key(temporary,key,value)
+        for key,value in {'NAPAR_INITIATIVE_SECONDS':'0','NAPAR_PAID_ENABLED':'false','NAPAR_LLM_BACKEND':'disabled','NAPAR_ACTION_TIMEOUT':'35'}.items():set_key(temporary,key,value)
         os.chown(temporary,account.pw_uid,account.pw_gid);temporary.chmod(0o600);os.replace(temporary,BRAIN/'.env')
         properties=GAME/'server.properties'
         lines=properties.read_text().splitlines()
@@ -205,10 +205,11 @@ print('Previous working build, settings and memory restored. Failed-version data
             try:
                 with urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2) as response:health=json.load(response)
                 log=GAME/'logs/latest.log'
-                if health.get('version')=='0.2.0' and health['connected'] and log.stat().st_mtime>=started and 'Napar runtime loaded.' in log.read_text(errors='replace'):
+                parked=runtime.exists() and json.loads(runtime.read_text()).get('parked',False)
+                if health.get('version')=='0.2.0' and (health['connected'] or parked) and log.stat().st_mtime>=started and 'Napar runtime loaded.' in log.read_text(errors='replace'):
                     request=urllib.request.Request('http://127.0.0.1:8000/v1/status',headers=headers)
                     with urllib.request.urlopen(request,timeout=3) as response:status=json.load(response)
-                    if all(tool in status['capabilities'] for tool in ('mine','craft','attack','sleep','follow_player')):
+                    if parked or all(tool in status['capabilities'] for tool in ('mine','craft','attack','sleep','follow_player')):
                         with socket.create_connection(('127.0.0.1',25565),timeout=2):pass
                         break
             except (OSError,ValueError,KeyError):pass
@@ -217,7 +218,7 @@ print('Previous working build, settings and memory restored. Failed-version data
         run('systemctl','is-active','napar-next-brain','napar-next-game')
         result={'version':'0.2.0','body_sha256':manifest['body_sha256'],'commit':args.ref,'health':health,'status':status,'backup':str(backup),'rollback':str(backup/'rollback.py'),'server_settings':overrides}
         (BASE/'upgrade-0.2-result.json').write_text(json.dumps(result,indent=2))
-        print('READY: NAPAR 0.2, separate player restored, '+str(len(status['capabilities']))+' game tools. Daily/step limits disabled; difficulty normal; view distance 16.',flush=True)
+        print('READY: NAPAR 0.2, separate player restored, '+str(len(status['capabilities']))+' game tools. Paid API disabled; free follow enabled; difficulty normal; view distance 16.',flush=True)
         print('Rollback: '+str(PYTHON)+' '+str(backup/'rollback.py'),flush=True)
         guard['required']=False
     except BaseException:

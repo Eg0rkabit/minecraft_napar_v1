@@ -37,11 +37,15 @@ class Store:
             if name not in memory_columns:
                 self.db.execute(f'ALTER TABLE memories ADD COLUMN {name} {definition}')
         self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS runtime_flags(key TEXT PRIMARY KEY,value TEXT);
             CREATE TABLE IF NOT EXISTS memory_history(id INTEGER PRIMARY KEY,world TEXT,key TEXT,payload TEXT,replaced TEXT);
             CREATE TABLE IF NOT EXISTS dialogue(id INTEGER PRIMARY KEY,world TEXT,role TEXT,text TEXT,created TEXT);
             CREATE TABLE IF NOT EXISTS preferences(world TEXT PRIMARY KEY,autonomy TEXT DEFAULT 'normal');
             CREATE TABLE IF NOT EXISTS observations(world TEXT,dimension TEXT,position TEXT,payload TEXT,verified TEXT,PRIMARY KEY(world,dimension,position));
         ''')
+        columns={row[1] for row in self.db.execute('PRAGMA table_info(preferences)')}
+        if 'presence' not in columns:
+            self.db.execute("ALTER TABLE preferences ADD COLUMN presence TEXT DEFAULT 'auto'")
         self.db.execute("UPDATE goals SET status='paused',summary='[revalidate] Brain restarted; verify current world before resuming' WHERE status='active'")
         self.db.commit()
 
@@ -161,4 +165,19 @@ class Store:
     def usage(self):
         row = self.db.execute('SELECT * FROM usage WHERE day=?', (self.now()[:10],)).fetchone()
         return dict(row) if row else {'day': self.now()[:10], 'calls': 0, 'tokens': 0}
+
+    def provider_pause(self, reason=None):
+        if reason is not None:
+            self.db.execute('INSERT OR REPLACE INTO runtime_flags VALUES(?,?)',('provider_pause',reason))
+            self.db.commit()
+        row=self.db.execute('SELECT value FROM runtime_flags WHERE key=?',('provider_pause',)).fetchone()
+        return row['value'] if row else ''
+
+    def presence(self,world,mode=None):
+        if mode is not None:
+            if mode not in ('stay','auto'):raise ValueError('Invalid presence mode')
+            with self.db:
+                self.db.execute('INSERT INTO preferences(world,presence) VALUES(?,?) ON CONFLICT(world) DO UPDATE SET presence=excluded.presence',(world,mode))
+        row=self.db.execute('SELECT presence FROM preferences WHERE world=?',(world,)).fetchone()
+        return row[0] if row else 'auto'
 

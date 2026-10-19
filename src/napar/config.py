@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: SecretStr = SecretStr("")
+    paid_enabled: bool = True
     max_calls_per_day: int = Field(default=120, ge=0, le=10000)
     max_steps: int = Field(default=6, ge=0, le=20)
     max_output_tokens: int = Field(default=700, ge=100, le=4000)
