@@ -48,7 +48,15 @@ async def probe(key, stage):
             'strict':True,'parameters':strict_schema(schema.model_json_schema())}}
             for name,(schema,description) in (LOCAL|REMOTE).items()]
         messages = [{'role':'user','content':'Connection test only: call napar_connection_check with ok=true. Do not call any game tools. After its result, say only: Готов.'}]
-        first = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
+        attempts=1
+        try:
+            first = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
+        except APIError as exc:
+            if getattr(exc,'status_code',None)!=429:
+                raise
+            print('Free model temporarily limited (429). Waiting for one rate-spaced retry.',flush=True)
+            attempts+=1
+            first = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
         if len(first.tool_calls)!=1 or first.tool_calls[0]['name']!='napar_connection_check':
             raise ValueError('Model did not complete the tool test; no configuration changed')
         call = first.tool_calls[0]
@@ -60,7 +68,7 @@ async def probe(key, stage):
         second = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
         if second.tool_calls or not second.text.strip():
             raise ValueError('Model did not finish the tool-result round trip; no configuration changed')
-        return {'calls':2,'tokens':first.tokens+second.tokens,'tool_roundtrip':True,'reply_available':True}
+        return {'calls':attempts+1,'tokens':first.tokens+second.tokens,'tool_roundtrip':True,'reply_available':True}
     finally:
         await backend.close()
 
@@ -87,7 +95,15 @@ def main():
     key = getpass.getpass('BeatAPI key (hidden): ').strip()
     if not re.fullmatch(r'sk-[A-Za-z0-9_-]{20,}', key):
         raise ValueError('Invalid key format; configuration unchanged')
-    checked = asyncio.run(probe(key, stage))
+    try:
+        checked = asyncio.run(probe(key, stage))
+    except APIError as exc:
+        if getattr(exc,'status_code',None)!=429:
+            raise
+        # Keep the explicitly selected free route usable when provider capacity returns.
+        # Never fall back to a paid model or describe this as a successful model test.
+        checked = dict(tool_roundtrip=False,reply_available=False,status=429)
+        print('Free route configured with an unverified model: provider still returns 429.',flush=True)
     values = dotenv_values(BRAIN/'.env')
     database = Path(values.get('NAPAR_DATABASE') or 'data/napar.db')
     if not database.is_absolute():
@@ -139,7 +155,7 @@ def main():
             time.sleep(1)
         else:
             raise TimeoutError('Brain did not become ready')
-        result=dict(ready=True,model=MODEL,base_url=URL,background_reasoning=False,min_interval_seconds=61,
+        result=dict(ready=True,model_verified=checked['tool_roundtrip'],model=MODEL,base_url=URL,background_reasoning=False,min_interval_seconds=61,
                     provider_pause=status['provider_pause'],connected=status['connected'],probe=checked,backup=str(backup))
         (BASE/'beatapi-result.json').write_text(json.dumps(result,indent=2))
         print(json.dumps(result,indent=2),flush=True)
