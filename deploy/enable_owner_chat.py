@@ -3,6 +3,7 @@ from pathlib import Path
 import compileall
 import json
 import os
+import pwd
 import shutil
 import sqlite3
 import subprocess
@@ -37,7 +38,8 @@ old_pause=row[0] if row else None
 try:
     app.write_text(updated)
     for key,value in {'NAPAR_LLM_BACKEND':'openai','NAPAR_PAID_ENABLED':'true','NAPAR_INITIATIVE_SECONDS':'0'}.items():set_key(env,key,value)
-    env.chmod(0o600)
+    account=pwd.getpwnam("napar-next")
+    os.chown(env,account.pw_uid,account.pw_gid);env.chmod(0o600)
     db.execute('INSERT OR REPLACE INTO runtime_flags VALUES(?,?)',('provider_pause',''));db.commit()
     subprocess.run(['systemctl','start','napar-next-brain'],check=True,timeout=120)
     headers={'Authorization':'Bearer '+values['NAPAR_BRIDGE_TOKEN']}
@@ -60,6 +62,7 @@ try:
 except BaseException:
     subprocess.run(['systemctl','stop','napar-next-brain'],check=True,timeout=120)
     shutil.copy2(backup/'app.py',app);shutil.copy2(backup/'environment',env)
+    account=pwd.getpwnam('napar-next');os.chown(env,account.pw_uid,account.pw_gid);env.chmod(0o600)
     if old_pause is None:db.execute('DELETE FROM runtime_flags WHERE key=?',('provider_pause',))
     else:db.execute('INSERT OR REPLACE INTO runtime_flags VALUES(?,?)',('provider_pause',old_pause))
     db.commit()
