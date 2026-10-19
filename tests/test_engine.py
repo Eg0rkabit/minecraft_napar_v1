@@ -27,6 +27,26 @@ async def test_disabled_does_not_charge_budget(runtime):
     assert runtime.store.usage()['calls'] == 0
 
 
+async def test_signed_tool_continuation_is_returned_to_provider(runtime):
+    wire = {'role': 'assistant', 'content': None, 'tool_calls': [{
+        'id': 'signed', 'type': 'function',
+        'function': {'name': 'recall', 'arguments': '{"query":"base"}'},
+        'extra_content': {'google': {'thought_signature': 'opaque'}}}]}
+    class SignedBackend:
+        calls = 0
+        async def decide(self, messages, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return Decision(tool_calls=[dict(id='signed', name='recall', arguments='{"query":"base"}')],
+                                assistant_message=wire)
+            assert messages[-2] == wire
+            assert messages[-1]['tool_call_id'] == 'signed'
+            return Decision('готов')
+    runtime.backend = SignedBackend()
+    assert (await runtime.handle('test'))['status'] == 'disabled'
+    assert runtime.backend.calls == 2
+
+
 async def test_stop_during_model_response_prevents_tool_execution(runtime):
     started, release = asyncio.Event(), asyncio.Event()
     class DelayedBackend:
@@ -139,4 +159,3 @@ async def test_observe_loop_does_not_evade_guard_with_new_snapshot_sequence(runt
     runtime.backend=Observing()
     assert (await runtime.handle('look'))['status']=='failed'
     assert runtime.backend.calls==3
-

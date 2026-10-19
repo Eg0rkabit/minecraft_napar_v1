@@ -152,7 +152,7 @@ class Engine:
                 if not decision.tool_calls:
                     final_text = decision.text
                     break
-                messages.append({
+                messages.append(decision.assistant_message or {
                     'role': 'assistant', 'content': decision.text or None,
                     'tool_calls': [
                         {'id': c['id'], 'type': 'function',
@@ -203,4 +203,3 @@ class Engine:
             return {'status': 'failed', 'message': text[:1000]}
         finally:
             self.busy = False
-

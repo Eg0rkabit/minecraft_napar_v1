@@ -3,9 +3,11 @@ from typing import Any
 
 
 class Decision:
-    def __init__(self, text: str = '', tool_calls: list[dict[str, Any]] | None = None, tokens: int = 0):
+    def __init__(self, text: str = '', tool_calls: list[dict[str, Any]] | None = None, tokens: int = 0,
+                 assistant_message: dict[str, Any] | None = None):
         self.text, self.tool_calls = text, tool_calls or []
         self.tokens = tokens
+        self.assistant_message = assistant_message
 
 
 class DisabledBackend:
@@ -18,6 +20,8 @@ def completion_options(model: str, max_tokens: int) -> dict[str, Any]:
     name = model.rsplit('/', 1)[-1]
     if name == 'gpt-5' or name.startswith('gpt-5-2025-'):
         return {'max_completion_tokens': max_tokens, 'reasoning_effort': 'minimal'}
+    if name == 'gemini-4-argon':
+        return {'max_tokens': max_tokens, 'reasoning_effort': 'low'}
     return {'max_tokens': max_tokens}
 
 
@@ -35,7 +39,13 @@ class OpenAIBackend:
         calls = []
         for call in message.tool_calls or []:
             calls.append({'id': call.id, 'name': call.function.name, 'arguments': call.function.arguments})
-        return Decision(message.content or '', calls, response.usage.total_tokens if response.usage else 0)
+        # Keep provider metadata (including Gemini tool signatures) verbatim in the next turn.
+        assistant = {'role': 'assistant', 'content': message.content or None}
+        if message.tool_calls:
+            assistant['tool_calls'] = [call.model_dump(exclude_none=True) for call in message.tool_calls]
+        assistant.update(message.model_extra or {})
+        return Decision(message.content or '', calls, response.usage.total_tokens if response.usage else 0,
+                        assistant_message=assistant)
 
     async def close(self):
         await self.client.close()
