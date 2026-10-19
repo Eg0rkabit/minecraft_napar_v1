@@ -57,7 +57,8 @@ public final class GroundNavigator {
         Cell best=null;
         for(int by=(int)Math.floor(y)-3;by<=(int)Math.floor(y)+1;by++){
             Cell candidate=surface(p,x,z,by);
-            double tolerance=candidate!=null&&p.isInWater()&&p.level().getFluidState(candidate.feet()).is(FluidTags.WATER)?2:.7;
+            // A floating owner's feet are above the surface cell even while we are still on shore.
+            double tolerance=candidate!=null&&p.level().getFluidState(candidate.feet()).is(FluidTags.WATER)?2:.7;
             if(candidate!=null&&Math.abs(candidate.y-y)<=tolerance&&(best==null||Math.abs(candidate.y-y)<Math.abs(best.y-y)))best=candidate;
         }
         return best;
@@ -120,4 +121,3 @@ public final class GroundNavigator {
         ((ServerPlayerInterface)player).getActionPack().stopAll();var callback=completion;completion=null;route=null;callback.accept(status,detail);
     }
 }
-

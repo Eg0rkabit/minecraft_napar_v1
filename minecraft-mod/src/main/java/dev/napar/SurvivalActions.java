@@ -53,6 +53,11 @@ public final class SurvivalActions {
         navigator.cancel();
         if(completion!=null)finish("cancelled","Physical action cancelled",new JsonObject());
     }
+    public void interruptForReflex(){
+        // A short survival response pauses following without forgetting the owner or trail.
+        if(followTarget==null){cancel();return;}
+        navigator.cancel();followRouteTarget=null;nextFollowRouteTick=0;
+    }
     public void start(EntityPlayerMPFake p,String tool,JsonObject args,double seconds,Consumer<JsonObject> callback){
         // Read-only tools may inspect a running action without interrupting it.
         if(tool.equals("inspect")){
@@ -255,4 +260,3 @@ public final class SurvivalActions {
         if(completion==null)return;var callback=completion;String previous=job;completion=null;job="idle";navigator.cancel();if(!previous.equals("sneak"))pack(player).stopAll();player.releaseUsingItem();callback.accept(result(status,detail,data));
     }
 }
-

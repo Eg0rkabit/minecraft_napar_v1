@@ -33,7 +33,7 @@ public final class SurvivalReflexes {
         boolean lava=p.isInLava();
         Creeper creeper=p.level().getEntitiesOfClass(Creeper.class,p.getBoundingBox().inflate(5),e->p.hasLineOfSight(e)&&(e.getSwellDir()>0||e.isIgnited())).stream().findFirst().orElse(null);
         if((lowAir||lava||creeper!=null||critical)&&ticks-lastIncident>=100){
-            lastIncident=ticks;actions.cancel();escapeUntil=ticks+60;
+            lastIncident=ticks;actions.interruptForReflex();escapeUntil=ticks+60;
             bridge.event("danger",lowAir?"Мало воздуха, всплываю":lava?"Попал в лаву, ищу берег":creeper!=null?"Рядом взрывающийся крипер, отступаю":"Критическое здоровье и противник рядом, отступаю");
             Vec3 origin=creeper!=null?creeper.position():critical?attacker.position():p.position();BlockPos best=null;double score=-Double.MAX_VALUE;
             for(BlockPos at:BlockPos.betweenClosed(p.blockPosition().offset(-5,-2,-5),p.blockPosition().offset(5,2,5))){
@@ -46,7 +46,7 @@ public final class SurvivalReflexes {
             if(best!=null)navigator.start(p,new Vec3(best.getX()+.5,best.getY(),best.getZ()+.5),3,(s,d)->{});
         }
         if(hurt&&!active()&&!actions.activity().equals("attack")&&!actions.activity().equals("eat")&&ticks-lastIncident>=100){
-            lastIncident=ticks;actions.cancel();escapeUntil=ticks+20;
+            lastIncident=ticks;actions.interruptForReflex();escapeUntil=ticks+20;
             bridge.event("danger",threatened?"Получил урон от видимого противника; нужно оценить обстановку":"Получил урон; нужно проверить причину");
         }
         if(ticks<escapeUntil&&(lowAir||lava)){((ServerPlayerInterface)p).getActionPack().start(EntityPlayerActionPack.ActionType.JUMP,EntityPlayerActionPack.Action.continuous());reflexJump=true;}
@@ -60,4 +60,3 @@ public final class SurvivalReflexes {
         }
     }
 }
-

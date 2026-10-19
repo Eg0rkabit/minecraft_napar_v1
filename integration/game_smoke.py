@@ -154,6 +154,26 @@ async def main():
                 await wait(lambda:app.state.bridge.observe()['position']['z']>5,12)
                 assert app.state.bridge.observe()['activity']=='following:Alex'
                 results.append(dict(scenario='resume_after_occlusion',position=app.state.bridge.observe()['position']))
+                # A normal hit must pause navigation briefly, not forget the follow order.
+                cmd('difficulty normal')
+                cmd('damage Napar 1 minecraft:generic')
+                await asyncio.sleep(2)
+                assert app.state.bridge.observe()['activity']=='following:Alex',app.state.bridge.observe()
+                results.append(dict(scenario='follow_survives_damage'))
+                # Deep water: approach a floating owner from dry land, then cross and climb out.
+                await action('stop',{},'confirmed')
+                for text in ['difficulty peaceful','fill 8 194 -12 16 199 20 water','tp Napar 4.5 200 .5','tp Alex 13.5 199.8 .5','player Alex jump continuous']:
+                    cmd(text)
+                await asyncio.sleep(2)
+                await action('follow_player',dict(player='Alex'))
+                await wait(lambda:app.state.bridge.observe()['position']['x']>9.5,25)
+                state=app.state.bridge.observe()
+                assert state['activity']=='following:Alex',state
+                results.append(dict(scenario='follow_floating_owner_from_shore',position=state['position']))
+                for text in ['player Alex stop','tp Alex 23.5 200 .5']:cmd(text)
+                await wait(lambda:app.state.bridge.observe()['position']['x']>18 and app.state.bridge.observe()['position']['y']>=199.9,30)
+                assert app.state.bridge.observe()['activity']=='following:Alex'
+                results.append(dict(scenario='swim_across_deep_river_and_leave_water',position=app.state.bridge.observe()['position']))
                 await action('stop',{},'confirmed')
                 stopped=app.state.bridge.observe()['position']
                 await asyncio.sleep(1)
@@ -314,4 +334,3 @@ async def main():
             await web
 
 if __name__=='__main__':asyncio.run(main())
-

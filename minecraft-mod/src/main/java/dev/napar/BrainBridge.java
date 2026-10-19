@@ -75,8 +75,10 @@ public final class BrainBridge {
             if (!(player instanceof EntityPlayerMPFake)) { state = null; reflexes.cancel(); actions.cancel(); return; }
             if (System.nanoTime() - lastContact > TimeUnit.SECONDS.toNanos(3)) stop(server);
             else {
-                navigator.tick();
-                actions.tick();
+                if(!reflexes.active()){
+                    navigator.tick();
+                    actions.tick();
+                }
                 reflexes.tick((EntityPlayerMPFake)player);
             }
             if (++ticks % 10 != 0) return;
@@ -203,4 +205,3 @@ public final class BrainBridge {
         results.add(result);
     }
 }
-
