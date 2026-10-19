@@ -136,6 +136,7 @@ def create_app(settings: Settings | None = None):
             'connected': bridge.connected, 'world_id': bridge.world_id,
             'session_id': bridge.session_id, 'usage': store.usage(), 'busy': engine.busy,
             'presence_mode':store.presence(bridge.world_id),
+            'observation':bridge.observe() if bridge.connected else None,
             'paid_enabled':settings.paid_enabled, 'provider_pause':store.provider_pause(),
             'capabilities':sorted(bridge.capabilities), 'autonomy':store.autonomy(bridge.world_id) if bridge.world_id else 'wait',
             'limits':{'daily_calls':settings.max_calls_per_day,'steps':settings.max_steps,'initiative_seconds':settings.initiative_seconds},

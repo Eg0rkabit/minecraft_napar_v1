@@ -20,6 +20,8 @@ needle='if (engine.paid_available() and bridge.connected and not inbox.full() an
 replacement='if (settings.initiative_seconds and engine.paid_available() and bridge.connected and not inbox.full() and time.monotonic()-last_incident>=60'
 assert text.count(needle)==1 or replacement in text,'Unexpected application version'
 updated=text.replace(needle,replacement)
+if "'observation':" not in updated:
+    updated=updated.replace("            'paid_enabled':settings.paid_enabled,", "            'observation':bridge.observe() if bridge.connected else None,\n            'paid_enabled':settings.paid_enabled,")
 compile(updated,str(app),'exec')
 backup=base/('backup-before-enable-chat-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()))
 backup.mkdir(mode=0o700)
