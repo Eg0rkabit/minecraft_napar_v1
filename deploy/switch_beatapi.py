@@ -37,7 +37,8 @@ async def probe(key, stage):
     try:
         models = await backend.client.models.list()
         if MODEL not in {item.id for item in models.data}:
-            raise ValueError('Requested model is not enabled for this key; no configuration changed')
+            print('Requested model absent from listing. Checking the documented ID once.',flush=True)
+            print('Gemini IDs:',[item.id[:120] for item in models.data if 'gemini' in item.id.lower()][:20],flush=True)
         tools = [{'type':'function','function':{'name':'napar_connection_check',
             'description':'Harmless connection test: confirm that tools work. No game action.',
             'parameters':{'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok']}}}]
@@ -154,6 +155,10 @@ if __name__=='__main__':
     try:
         main()
     except APIError as exc:
+        body=exc.body if isinstance(exc.body,dict) else {}
+        error=body.get('error',body)
+        code=error.get('code','') if isinstance(error,dict) else ''
+        code=code if isinstance(code,str) and re.fullmatch(r'[a-zA-Z0-9_.-]{1,80}',code) else ''
         print('BeatAPI rejected the check. HTTP',getattr(exc,'status_code',None),
-              'No automatic retry; previous configuration preserved.',flush=True)
+              'code',code,'No automatic retry; previous configuration preserved.',flush=True)
         raise SystemExit(1)
