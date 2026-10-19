@@ -32,6 +32,7 @@ async def probe(key, stage):
     sys.path.insert(0, str(stage/'src'))
     from napar.config import Settings
     from napar.llm import OpenAIBackend
+    from napar.toolbox import LOCAL, REMOTE, strict_schema
     backend = OpenAIBackend(Settings(_env_file=None, bridge_token='x'*40,
         llm_api_key=key, llm_base_url=URL, llm_min_interval_seconds=61))
     backend.next_request = 0  # No generation has been sent with this free setup probe yet.
@@ -43,7 +44,10 @@ async def probe(key, stage):
         tools = [{'type':'function','function':{'name':'napar_connection_check',
             'description':'Harmless connection test: confirm that tools work. No game action.',
             'parameters':{'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok']}}}]
-        messages = [{'role':'user','content':'Call napar_connection_check with ok=true. After its result, say only: Готов.'}]
+        tools += [{'type':'function','function':{'name':name,'description':description,
+            'strict':True,'parameters':strict_schema(schema.model_json_schema())}}
+            for name,(schema,description) in (LOCAL|REMOTE).items()]
+        messages = [{'role':'user','content':'Connection test only: call napar_connection_check with ok=true. Do not call any game tools. After its result, say only: Готов.'}]
         first = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
         if len(first.tool_calls)!=1 or first.tool_calls[0]['name']!='napar_connection_check':
             raise ValueError('Model did not complete the tool test; no configuration changed')
