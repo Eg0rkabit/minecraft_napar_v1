@@ -13,6 +13,7 @@ from napar.llm import OpenAIBackend
     ('gpt-5', {'max_completion_tokens': 700, 'reasoning_effort': 'minimal'}),
     ('gpt-4o-mini', {'max_tokens': 700}),
     ('gemini-4-argon', {'max_tokens': 700, 'reasoning_effort': 'low'}),
+    ('gemini-3.8-flash-free', {'max_tokens': 700, 'reasoning_effort': 'low'}),
 ])
 async def test_model_options_on_wire(monkeypatch, model, expected):
     def respond(request):
@@ -65,5 +66,29 @@ async def test_gemini_tool_metadata_survives_adapter(monkeypatch):
                                       model='gemini-4-argon', max_tokens=700)
         assert result.assistant_message['tool_calls'] == [wire_call]
         assert result.assistant_message['reasoning_content'] == 'provider continuation metadata'
+    finally:
+        await backend.close()
+
+
+async def test_free_model_requests_are_spaced_even_when_submitted_together(monkeypatch):
+    import asyncio
+    import time
+    times = []
+    def respond(request):
+        times.append(time.monotonic())
+        return httpx.Response(200, json={
+            'id': 'test', 'object': 'chat.completion', 'created': 1, 'model': 'gemini-3.8-flash-free',
+            'choices': [{'index': 0, 'finish_reason': 'stop', 'message': {
+                'role': 'assistant', 'content': 'ok'}}]})
+    original = openai.AsyncOpenAI
+    monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kwargs: original(
+        **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))))
+    backend = OpenAIBackend(Settings(_env_file=None, bridge_token='x' * 40,
+        llm_api_key='test-secret', llm_min_interval_seconds=.05))
+    try:
+        await asyncio.gather(*(backend.decide([{'role': 'user', 'content': 'test'}], [],
+            model='gemini-3.8-flash-free', max_tokens=700) for _ in range(3)))
+        assert len(times) == 3
+        assert all(b-a >= .045 for a,b in zip(times,times[1:]))
     finally:
         await backend.close()

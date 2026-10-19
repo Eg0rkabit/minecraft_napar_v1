@@ -1,4 +1,6 @@
 """Optional model adapter. Disabled mode performs no network request."""
+import asyncio
+import time
 from typing import Any
 
 
@@ -20,7 +22,7 @@ def completion_options(model: str, max_tokens: int) -> dict[str, Any]:
     name = model.rsplit('/', 1)[-1]
     if name == 'gpt-5' or name.startswith('gpt-5-2025-'):
         return {'max_completion_tokens': max_tokens, 'reasoning_effort': 'minimal'}
-    if name == 'gemini-4-argon':
+    if name in ('gemini-4-argon', 'gemini-3.8-flash-free'):
         return {'max_tokens': max_tokens, 'reasoning_effort': 'low'}
     return {'max_tokens': max_tokens}
 
@@ -30,11 +32,23 @@ class OpenAIBackend:
         from openai import AsyncOpenAI
         self.client = AsyncOpenAI(api_key=settings.llm_api_key.get_secret_value(),
                                   base_url=settings.llm_base_url.rstrip('/'), timeout=60, max_retries=0)
+        self.min_interval = settings.llm_min_interval_seconds
+        # A startup grace also respects a request issued just before a process restart.
+        self.next_request = time.monotonic() + self.min_interval
+        self.request_lock = asyncio.Lock()
 
     async def decide(self, messages, tools, *, model, max_tokens):
-        response = await self.client.chat.completions.create(
-            model=model, messages=messages, tools=tools, tool_choice='auto',
-            parallel_tool_calls=False, **completion_options(model, max_tokens))
+        async with self.request_lock:
+            loop = asyncio.get_running_loop()
+            delay = self.next_request - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model, messages=messages, tools=tools, tool_choice='auto',
+                    parallel_tool_calls=False, **completion_options(model, max_tokens))
+            finally:
+                self.next_request = loop.time() + self.min_interval
         message = response.choices[0].message
         calls = []
         for call in message.tool_calls or []:

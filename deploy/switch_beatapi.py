@@ -20,7 +20,7 @@ from openai import APIError
 
 BASE = Path('/opt/napar-next')
 BRAIN = BASE/'brain'
-MODEL = 'gemini-4-argon'
+MODEL = 'gemini-3.8-flash-free'
 URL = 'https://direct.beatapi.io/v1'
 
 
@@ -33,7 +33,8 @@ async def probe(key, stage):
     from napar.config import Settings
     from napar.llm import OpenAIBackend
     backend = OpenAIBackend(Settings(_env_file=None, bridge_token='x'*40,
-        llm_api_key=key, llm_base_url=URL))
+        llm_api_key=key, llm_base_url=URL, llm_min_interval_seconds=61))
+    backend.next_request = 0  # No generation has been sent with this free setup probe yet.
     try:
         models = await backend.client.models.list()
         if MODEL not in {item.id for item in models.data}:
@@ -51,6 +52,7 @@ async def probe(key, stage):
             raise ValueError('Tool test arguments invalid; no configuration changed')
         messages.append(first.assistant_message)
         messages.append({'role':'tool','tool_call_id':call['id'],'content':'{"ok":true}'})
+        print('First free request succeeded. Waiting 61 seconds for the free-model window before tool-result check.',flush=True)
         second = await backend.decide(messages, tools, model=MODEL, max_tokens=1536)
         if second.tool_calls or not second.text.strip():
             raise ValueError('Model did not finish the tool-result round trip; no configuration changed')
@@ -97,7 +99,7 @@ def main():
     try:
         shutil.copy2(BRAIN/'.env', backup/'environment')
         (backup/'environment').chmod(0o600)
-        for name in ('llm.py','engine.py'):
+        for name in ('llm.py','engine.py','config.py'):
             shutil.copy2(BRAIN/'src/napar'/name, backup/name)
         with sqlite3.connect(database) as db:
             row=db.execute('SELECT value FROM runtime_flags WHERE key=?',('provider_pause',)).fetchone()
@@ -107,13 +109,14 @@ def main():
         shutil.copy2(BRAIN/'.env',temporary)
         settings={'NAPAR_LLM_API_KEY':key,'NAPAR_LLM_BASE_URL':URL,'NAPAR_LLM_MODEL':MODEL,
                   'NAPAR_LLM_BACKEND':'openai','NAPAR_PAID_ENABLED':'true',
-                  'NAPAR_INITIATIVE_SECONDS':'0','NAPAR_MAX_OUTPUT_TOKENS':'1536'}
+                  'NAPAR_INITIATIVE_SECONDS':'0','NAPAR_MAX_OUTPUT_TOKENS':'1536',
+                  'NAPAR_LLM_MIN_INTERVAL_SECONDS':'61'}
         for name,value in settings.items():
             set_key(temporary,name,value)
         os.chown(temporary,account.pw_uid,account.pw_gid)
         temporary.chmod(0o600)
         os.replace(temporary,BRAIN/'.env')
-        for name in ('llm.py','engine.py'):
+        for name in ('llm.py','engine.py','config.py'):
             destination=BRAIN/'src/napar'/name
             shutil.copy2(stage/'src/napar'/name,destination)
             os.chown(destination,account.pw_uid,account.pw_gid)
@@ -132,7 +135,7 @@ def main():
             time.sleep(1)
         else:
             raise TimeoutError('Brain did not become ready')
-        result=dict(ready=True,model=MODEL,base_url=URL,background_reasoning=False,
+        result=dict(ready=True,model=MODEL,base_url=URL,background_reasoning=False,min_interval_seconds=61,
                     provider_pause=status['provider_pause'],connected=status['connected'],probe=checked,backup=str(backup))
         (BASE/'beatapi-result.json').write_text(json.dumps(result,indent=2))
         print(json.dumps(result,indent=2),flush=True)
@@ -141,7 +144,7 @@ def main():
         if (backup/'environment').exists():
             shutil.copy2(backup/'environment',BRAIN/'.env')
             os.chown(BRAIN/'.env',account.pw_uid,account.pw_gid)
-        for name in ('llm.py','engine.py'):
+        for name in ('llm.py','engine.py','config.py'):
             if (backup/name).exists():
                 shutil.copy2(backup/name,BRAIN/'src/napar'/name)
                 os.chown(BRAIN/'src/napar'/name,account.pw_uid,account.pw_gid)
